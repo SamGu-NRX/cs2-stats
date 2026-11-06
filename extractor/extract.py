@@ -30,6 +30,7 @@ import shutil
 import sys
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version
@@ -3104,16 +3105,23 @@ def teams_from_filename(dem: Path) -> tuple[str | None, str | None]:
 
 
 def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = None, archive: str = "",
-                 meta_extra: dict | None = None) -> dict:
-    """Parse one demo into out_dir. Returns a result dict; result['ok'] is the verdict."""
+                 meta_extra: dict | None = None, name: str | None = None,
+                 extra_from_players: Callable[[pd.DataFrame], dict] | None = None) -> dict:
+    """Parse one demo into out_dir. Returns a result dict; result['ok'] is the verdict.
+
+    name replaces the demo's file name wherever it is stored or read for team names: a recorded demo's own
+    name ends in the server's hostname, which is the player's Steam name (local_import.py renames it).
+    extra_from_players(players table) returns fields added to match.extra, for what only the parsed players
+    say, such as which of them recorded the demo."""
     if source not in SOURCES:
         raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
     t0 = time.perf_counter()
     dem, out_dir = Path(dem), Path(out_dir)
-    ctx = Context(dem=dem, out=out_dir, archive=archive, meta_extra=meta_extra or {},
+    ctx = Context(dem=dem, out=out_dir, archive=archive, meta_extra=dict(meta_extra or {}),
                   mapdata=Path(mapdata) if mapdata else None)
-    team1, team2 = teams_from_filename(dem)
-    result = dict(archive=archive, extractor_version=EXTRACTOR_VERSION, dem_file=dem.name,
+    named = Path(name) if name else dem
+    team1, team2 = teams_from_filename(named)
+    result = dict(archive=archive, extractor_version=EXTRACTOR_VERSION, dem_file=named.name,
                   dem_bytes=dem.stat().st_size, map=None, team1_file=team1,
                   team2_file=team2, ok=False,
                   errors=[], timings=ctx.timings, rss_gb=ctx.rss_gb, rows={}, bytes={}, validation={})
@@ -3126,7 +3134,7 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
             else [dict(check="truncated", expected=None, actual=info["rounds"], ok=True, fatal=False,
                        note=f"awpy: {info['awpy_error']}; validated through round {info['rounds']}")]
         header = info["header"]
-        result["map"] = map_key_for(dem, header.get("map_name", "unknown"))
+        result["map"] = map_key_for(named, header.get("map_name", "unknown"))
         result["map_name"] = header.get("map_name")
         result["tick_rate"] = ctx.tick_rate
         result["rounds"] = info["rounds"]
@@ -3138,6 +3146,8 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
         vis = info["visibility"]
         result["visibility"] = vis
         demo_sha256 = file_sha256(dem)
+        if extra_from_players:
+            ctx.meta_extra.update(extra_from_players(ctx.tables["demoparser2"]["players"]))
         match = dict(match_id=demo_sha256[:16], source=source, map=header.get("map_name"), tick_rate=ctx.tick_rate,
                     demo_sha256=demo_sha256, extractor_version=EXTRACTOR_VERSION, schema_version=SCHEMA_VERSION,
                     visibility_status=vis["status"], mesh_release=vis.get("release"),
@@ -3147,14 +3157,16 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                     truncated=ctx.truncated,
                     velocity_source="position_diff" if ctx.truncated else "networked",
                     map_key=result["map"],
-                    dem_file=dem.name, dem_bytes=dem.stat().st_size, archive=archive,
+                    dem_file=named.name, dem_bytes=dem.stat().st_size, archive=archive,
                     team1_file=team1, team2_file=team2, team_ct_start=start_ct, team_t_start=start_t,
                     score_ct_start=info["final_score"].get(start_ct), score_t_start=info["final_score"].get(start_t),
                     n_rounds=info["rounds"], match_start_tick=info["match_start_tick"],
                     unattributed_damage_hp=info["unattributed_damage_hp"],
                     final_tick=info["final_tick"], playback_ticks=info["awpy_header"].get("playback_ticks"),
                     patch_version=header.get("patch_version"), build_num=info["awpy_header"].get("build_num"),
-                    server_name=header.get("server_name"), demo_version_guid=header.get("demo_version_guid"),
+                    # a listen server is named after the player hosting it, so a recorded demo's is not kept
+                    server_name="" if source == "local" else header.get("server_name"),
+                    demo_version_guid=header.get("demo_version_guid"),
                     demoparser2_version=pkg_version("demoparser2"), awpy_version=pkg_version("awpy"),
                     polars_version=pl.__version__, pandas_version=pd.__version__,
                     python_version=platform.python_version(),

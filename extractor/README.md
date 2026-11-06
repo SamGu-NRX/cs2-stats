@@ -75,6 +75,19 @@ Valve demos differ from HLTV GOTV demos in ways the extractor handles (details i
 - Players disconnect, rejoin or abandon. An abandoner is checked against his counters at the moment he disconnected.
 - They do carry `player_blind`, so the rebuilt `blinds` are checked against it.
 
+### Demos recorded on this machine
+
+`local_import.py` extracts the GOTV demos CS2 records during a Bot Mode match (`tv_autorecord`, `auto-*.dem` in the `replays` folder) with source `local`. It shares `valve_import.py`'s core: the same layout, skip rule, `--force`, `--progress` and summary.
+
+```sh
+.venv/Scripts/python -I local_import.py --out <dir> --mapdata <cs2-stats-data>/mapdata/2000935
+.venv/Scripts/python -I local_import.py --out <dir> path/to/auto-x.dem
+```
+
+CS2 names a recorded demo after the server, and a listen server is named after the player hosting it, so the file name ends in a Steam name. The importer never stores or prints that name. Each demo goes to `<out>/<id>/`, where `<id>` is `<yyyymmddThhmmZ>_<map>_<sha8>`: the file's creation time in UTC, the header's map and the first 8 hex digits of its SHA-256. `match.dem_file` is `<id>.dem`, and `match.server_name` is empty.
+
+`match.extra` carries `pov`, the SteamID64 of the player who recorded the match: the only human when there is exactly one, else the user (found as `valve_import.py` finds it) if the user played. Its `date` and `started_at` are the file's creation time. Each summary entry has a `reason`: null when the demo validated, `no_rounds` for a demo with no round played after the match started (cut off in warmup or freeze time), else `extract_failed`. Exit codes match `valve_import.py`'s. `design/recording.md` describes how the app records and keeps these demos.
+
 ### The app
 
 The app reads the folder through the same host layer as plugin matches: `list_valve` and `read_valve` in `app/src-tauri/src/lib.rs` on the desktop, `/__valve/*` in `app/vite.config.ts` for `vite dev` and `vite preview`. A match is the version folder its `CURRENT` names, and it is seen from the SteamID64 in `valve-user.local.json`. Wingman matches are listed but left out of career views, because the rating and win-probability models and the pro baselines are 5v5.

@@ -216,14 +216,30 @@ def match_date(dem: Path) -> dict:
     return dict(date=at, started_at=at, date_source=source)
 
 
-def already_done(map_dir: Path, dem: Path) -> bool:
-    """The map's current tables came from this exact file, this extractor version and this importer."""
+def already_done(map_dir: Path, dem: Path, importer_version: int) -> bool:
+    """The map's current tables came from this exact file, this extractor version and this importer version."""
     d = extract.resolve_map_dir(map_dir) if map_dir.exists() else None
     if d is None:
         return False
     m = pl.read_parquet(d / "match.parquet", columns=["demo_sha256", "extractor_version", "extra"]).row(0, named=True)
     return (m["extractor_version"] == extract.EXTRACTOR_VERSION and m["demo_sha256"] == extract.file_sha256(dem)
-            and json.loads(m["extra"]).get("importer_version") == IMPORTER_VERSION)
+            and json.loads(m["extra"]).get("importer_version") == importer_version)
+
+
+def extract_into(dem: Path, map_dir: Path, source: str, mapdata: Path | None, meta_extra: dict, force: bool,
+                 archive: str, name: str | None = None, extra_from_players=None) -> dict:
+    """One demo's part of an import result: skipped when its current tables are up to date (meta_extra's
+    importer_version), else extracted into map_dir. Shared by this importer and local_import.py."""
+    if not force and already_done(map_dir, dem, meta_extra["importer_version"]):
+        return dict(ok=True, skipped="already extracted from this file by this extractor version")
+    res = extract.extract_demo(dem, map_dir, source, mapdata=mapdata, archive=archive, meta_extra=meta_extra,
+                               name=name, extra_from_players=extra_from_players)
+    v = res.get("validation") or {}
+    gc.collect()
+    return dict(ok=res["ok"], errors=res["errors"], map=res.get("map_name"), rounds=res.get("rounds"),
+                final_score=res.get("final_score"), tick_rate=res.get("tick_rate"),
+                visibility=(res.get("visibility") or {}).get("status"), seconds=res.get("seconds"),
+                failed_checks=v.get("failed", []), warnings=v.get("nonfatal_failed", []))
 
 
 def user_in_match(map_dir: Path, steamid: int) -> bool | None:
@@ -242,18 +258,9 @@ def import_demos(demos: list[Path], out: Path, mapdata: Path | None, user: dict,
         row = dict(demo=dem.name, out=str(map_dir))
         if progress:
             progress(dict(event="start", i=i, n=len(demos), demo=dem.name))
-        if not force and already_done(map_dir, dem):
-            row.update(ok=True, skipped="already extracted from this file by this extractor version")
-        else:
-            res = extract.extract_demo(dem, map_dir, "valve", mapdata=mapdata, archive=dem.stem,
-                                       meta_extra=dict(importer="valve_import", importer_version=IMPORTER_VERSION,
-                                                       **match_date(dem)))
-            v = res.get("validation") or {}
-            row.update(ok=res["ok"], errors=res["errors"], map=res.get("map_name"), rounds=res.get("rounds"),
-                       final_score=res.get("final_score"), tick_rate=res.get("tick_rate"),
-                       visibility=(res.get("visibility") or {}).get("status"), seconds=res.get("seconds"),
-                       failed_checks=v.get("failed", []), warnings=v.get("nonfatal_failed", []))
-            gc.collect()
+        row.update(extract_into(dem, map_dir, "valve", mapdata, force=force, archive=dem.stem,
+                                meta_extra=dict(importer="valve_import", importer_version=IMPORTER_VERSION,
+                                                **match_date(dem))))
         row["user_in_match"] = user_in_match(map_dir, user["steamid"]) if row["ok"] else None
         rows.append(row)
         if progress:

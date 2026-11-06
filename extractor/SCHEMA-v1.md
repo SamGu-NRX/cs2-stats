@@ -116,7 +116,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `schema_version` | Int16 | no | 1 |
 | `score_ct_start` | Int16 | no | final score of team_ct_start |
 | `score_t_start` | Int16 | no | final score of team_t_start |
-| `server_name` | String | no | server name |
+| `server_name` | String | no | server name; empty for a `local` demo, whose listen server is named after the player hosting it |
 | `smoke_model` | String | no | how smoke_blocked is computed (an approximation) |
 | `source` | String | no | local | valve | faceit | hltv |
 | `team1_file` | String | yes | first team slug in the file name; null when the file name does not start `<team1>-vs-<team2>-` |

@@ -323,7 +323,7 @@ def test_a_saved_user_survives_a_later_steam_login_and_an_explicit_one_replaces_
 def _fake_extractor(calls: list, failing: set):
     """Stands in for extract.extract_demo: publishes a minimal map for a demo that passes, nothing otherwise."""
 
-    def fake(dem, out_dir, source, mapdata=None, archive="", meta_extra=None):
+    def fake(dem, out_dir, source, mapdata=None, archive="", meta_extra=None, name=None, extra_from_players=None):
         calls.append(Path(dem).name)
         ok = Path(dem).name not in failing
         if ok:  # published the way write_output does: under the map's lock, listing the files written
@@ -379,9 +379,9 @@ def test_a_demos_date_is_its_dem_info_match_time_else_its_file_time(tmp_path, mo
     # protobuf: field 1 the match id, field 2 the match time (Unix seconds), then nested messages.
     extras, fake = [], _fake_extractor([], set())
 
-    def capture(dem, out_dir, source, mapdata=None, archive="", meta_extra=None):
+    def capture(dem, out_dir, source, mapdata=None, archive="", meta_extra=None, **kw):
         extras.append(meta_extra)
-        return fake(dem, out_dir, source, mapdata, archive, meta_extra)
+        return fake(dem, out_dir, source, mapdata, archive, meta_extra, **kw)
     monkeypatch.setattr(vi.extract, "extract_demo", capture)
     a, b = tmp_path / "a.dem", tmp_path / "b.dem"
     a.write_bytes(b"demo a")
