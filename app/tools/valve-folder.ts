@@ -1,5 +1,6 @@
-// The user's imported Valve matchmaking matches (extractor/valve_import.py output), for the dev and
-// preview servers; src-tauri/src/lib.rs implements the same rules for the desktop app.
+// The user's imported Valve matchmaking matches (extractor/valve_import.py output) and the demos CS2
+// recorded of their Bot Mode matches (extractor/local_import.py output, "local/..."), for the dev and
+// preview servers; src-tauri/src/lib.rs and demos.rs implement the same rules for the desktop app.
 //
 // The folder holds one map folder per demo in the extractor's versioned layout, and valve-user.local.json,
 // the user's SteamID64. A match is listed as "valve/<demo>/<version folder>": naming the version means
@@ -67,8 +68,8 @@ function isInside(root: string, p: string): boolean {
 }
 
 /** Throws unless p, resolved, lies inside root: a version folder or table that is a link to elsewhere is refused. */
-function contained(root: string, p: string, rel: string): void {
-  if (!isInside(root, p)) throw new ValvePathError(`${rel}: resolves outside the Valve folder`);
+function contained(root: string, p: string, rel: string, what: string): void {
+  if (!isInside(root, p)) throw new ValvePathError(`${rel}: resolves outside the ${what} folder`);
 }
 
 /**
@@ -112,17 +113,17 @@ function parseManifest(text: string): Record<string, number> {
  * be a plain table file name. A version that fails any of it is skipped, and nothing outside root is
  * read. Null when the folder holds no versioned map.
  */
-function valveMap(root: string, mapDir: string): { dir: string; sizes: Record<string, number> } | { skipped: string } | null {
+function tablesMap(root: string, mapDir: string, what: string): { dir: string; sizes: Record<string, number> } | { skipped: string } | null {
   if (existsSync(path.join(mapDir, "RETIRED"))) return { skipped: "retired" };
   const pointer = path.join(mapDir, "CURRENT");
   if (!existsSync(pointer)) return null;
-  if (!isInside(root, pointer)) return { skipped: "CURRENT resolves outside the Valve folder" };
+  if (!isInside(root, pointer)) return { skipped: `CURRENT resolves outside the ${what} folder` };
   const name = readFileSync(pointer, "utf-8").trim();
   if (!VERSION_DIR.test(name)) return { skipped: `CURRENT names "${name}", which is not a version folder` };
   const dir = path.join(mapDir, name);
   const complete = path.join(dir, "COMPLETE");
   if (!existsSync(complete)) return { skipped: `${name} has no COMPLETE file yet` };
-  if (!isInside(root, complete)) return { skipped: "its version folder resolves outside the Valve folder" };
+  if (!isInside(root, complete)) return { skipped: `its version folder resolves outside the ${what} folder` };
   let sizes: Record<string, number>;
   try {
     sizes = parseManifest(readFileSync(complete, "utf-8"));
@@ -132,7 +133,7 @@ function valveMap(root: string, mapDir: string): { dir: string; sizes: Record<st
   for (const [f, bytes] of Object.entries(sizes)) {
     const p = path.join(dir, f);
     if (!existsSync(p)) return { skipped: `${name}/${f} is missing` };
-    if (!isInside(root, p)) return { skipped: `${name}/${f} resolves outside the Valve folder` };
+    if (!isInside(root, p)) return { skipped: `${name}/${f} resolves outside the ${what} folder` };
     if (statSync(p).size !== bytes) return { skipped: `${name}/${f} is not at its listed ${bytes} bytes` };
   }
   return { dir, sizes };
@@ -142,24 +143,43 @@ export function listValve(root: string): ValveListing {
   const out: ValveListing = { folder: root, user: null, userError: null, files: [], skipped: [] };
   if (!existsSync(root)) return out;
   ({ user: out.user, error: out.userError } = readUser(root));
+  ({ files: out.files, skipped: out.skipped } = listTables(root, "valve", "Valve"));
+  return out;
+}
+
+/** The recorded demos' tables (extractor/local_import.py), as "local/<id>/<version folder>"; each match names its own player in extra.pov. */
+export interface LocalListing { folder: string; files: ValveEntry[]; skipped: { file: string; why: string }[] }
+export function listLocal(root: string): LocalListing {
+  return { folder: root, ...(existsSync(root) ? listTables(root, "local", "recorded demos") : { files: [], skipped: [] }) };
+}
+
+/** The map folders under root whose CURRENT version is complete, as "<prefix>/<folder>/<version>", newest folder name first, and the rest with why. */
+function listTables(root: string, prefix: string, what: string): Pick<LocalListing, "files" | "skipped"> {
+  const out: Pick<LocalListing, "files" | "skipped"> = { files: [], skipped: [] };
   for (const d of readdirSync(root, { withFileTypes: true })) {
     if (!d.isDirectory() || !isName(d.name)) continue;
     // whatever goes wrong with one map folder skips that match, never the whole listing
     try {
-      const r = valveMap(root, path.join(root, d.name));
+      const r = tablesMap(root, path.join(root, d.name), what);
       if (!r) continue;
-      if ("skipped" in r) { out.skipped.push({ file: `valve/${d.name}`, why: r.skipped }); continue; }
+      if ("skipped" in r) { out.skipped.push({ file: `${prefix}/${d.name}`, why: r.skipped }); continue; }
       out.files.push({
-        file: `valve/${d.name}/${path.basename(r.dir)}`,
+        file: `${prefix}/${d.name}/${path.basename(r.dir)}`,
         size: Object.values(r.sizes).reduce((a, b) => a + b, 0),
         mtime: Math.round(statSync(path.join(r.dir, "COMPLETE")).mtimeMs),
       });
     } catch (e) {
-      out.skipped.push({ file: `valve/${d.name}`, why: (e as Error).message });
+      out.skipped.push({ file: `${prefix}/${d.name}`, why: (e as Error).message });
     }
   }
   out.files.sort((a, b) => b.file.localeCompare(a.file));
   return out;
+}
+
+/** The recorded demos' tables: CS2_LOCAL_MATCHES when set (the dev data), else %APPDATA%\BotMatchStats\local. */
+export function localRoot(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.CS2_LOCAL_MATCHES) return path.resolve(env.CS2_LOCAL_MATCHES);
+  return env.APPDATA ? path.join(env.APPDATA, "BotMatchStats", "local") : null;
 }
 
 /**
@@ -187,15 +207,22 @@ export function importerCommand(root: string, env: NodeJS.ProcessEnv = process.e
  * list does not name at its size, throws.
  */
 export function readValve(root: string, rel: string): Buffer {
+  return readTables(root, rel, "Valve");
+}
+
+/** readValve for the recorded demos' tables. */
+export const readLocal = (root: string, rel: string) => readTables(root, rel, "recorded demos");
+
+function readTables(root: string, rel: string, what: string): Buffer {
   const parts = rel.split("/");
   const [demo, version, table] = parts;
   if (parts.length < 2 || parts.length > 3 || !isName(demo) || !VERSION_DIR.test(version) || (table !== undefined && !/^[a-z0-9_]+\.parquet$/.test(table))) {
-    throw new ValvePathError(`${rel}: not a Valve match path (<demo>/<version folder>[/<table>.parquet])`);
+    throw new ValvePathError(`${rel}: not a ${what} match path (<demo>/<version folder>[/<table>.parquet])`);
   }
   const dir = path.join(root, demo, version);
   const complete = path.join(dir, "COMPLETE");
   if (!existsSync(complete)) throw new Error(`${rel}: this version is gone; rescan`);
-  contained(root, complete, rel);
+  contained(root, complete, rel, what);
   let sizes: Record<string, number>;
   try {
     sizes = parseManifest(readFileSync(complete, "utf-8"));
@@ -204,7 +231,7 @@ export function readValve(root: string, rel: string): Buffer {
   }
   if (table === undefined) return Buffer.from(JSON.stringify(Object.keys(sizes)));
   if (!(table in sizes)) throw new Error(`${rel}: not one of this version's tables`);
-  contained(root, path.join(dir, table), rel);
+  contained(root, path.join(dir, table), rel, what);
   const bytes = readFileSync(path.join(dir, table));
   if (bytes.length !== sizes[table]) throw new Error(`${rel}: ${bytes.length} bytes, not the ${sizes[table]} COMPLETE lists; rescan`);
   return bytes;

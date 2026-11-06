@@ -18,6 +18,8 @@ export const MOCK_MARK = "cs2stats-mock-clips-host";
 const USER = "C:\\Users\\Player";
 const CLIPS = `${USER}\\AppData\\Roaming\\BotMatchStats\\clips`;
 const STEAM = "D:\\Steam\\steamapps\\common\\Counter-Strike Global Offensive";
+const REPLAYS = `${STEAM}\\game\\csgo\\replays`;
+const DEMOS = `${USER}\\AppData\\Roaming\\BotMatchStats\\demos`;
 const HLAE = `${USER}\\Tools\\HLAE\\HLAE.exe`;
 const REFUSE = (what: string) => Promise.reject(new Error(`The stand-in clips host (${MOCK_MARK}) does not ${what}.`));
 
@@ -35,7 +37,7 @@ function planOf(request: JobRequest): RenderPlan {
     powershell: ["&", ...argv.map((a) => `'${a.replaceAll("'", "''")}'`)].join(" "), cfgFile: "cs2stats_clips.cfg",
     cfgText: `mirv_script_load "${jobDir.replaceAll("\\", "/")}/launches/<launch nonce>.js"\n`, directorFile: `${jobDir}\\director.js`,
     demos: [...byDemo].map(([demo, cs]) => ({
-      path: `${STEAM}\\game\\csgo\\replays\\${demo}`, tickRate: cs[0].tickRate,
+      path: `${cs[0].root === "demos" ? DEMOS : REPLAYS}\\${demo}`, tickRate: cs[0].tickRate,
       clips: [...cs].sort((a, b) => a.startTick - b.startTick).map((c) => ({ id: c.id, steamid: c.steamid, start: c.startTick, end: c.endTick, reason: c.reason })),
     })),
     outputs: [], request, review: "0".repeat(64),
@@ -51,7 +53,7 @@ export function mockClipsHost(scenario: string): ClipsHost | null {
       cs2: { path: `${STEAM}\\game\\bin\\win64\\cs2.exe`, error: null }, replays: { path: `${STEAM}\\game\\csgo\\replays`, error: null },
       hlae: { path: hlae ?? HLAE, error: null }, ffmpeg: { path: `${USER}\\scoop\\shims\\ffmpeg.exe`, error: null },
     }),
-    demos: async (names) => names.map((name) => ({ name, path: `${STEAM}\\game\\csgo\\replays\\${name}`, size: 1 })),
+    demos: async (refs) => refs.map(({ root, name }) => ({ root, name, path: `${root === "demos" ? DEMOS : REPLAYS}\\${name}`, size: 1 })),
     scan: async () => ({ finished: [], takes: [], reels: [], waiting: scenario === "waiting" ? 1 : 0 }),
     plan: (request, save) => (save !== null ? REFUSE("save plans")
       : scenario === "held" ? new Promise<RenderPlan>(() => {})

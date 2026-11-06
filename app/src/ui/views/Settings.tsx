@@ -25,6 +25,7 @@ import { BarContent } from "../shell/Bar";
 import { poolLabel } from "../../worker/pool-names";
 import { KeyChips, SHORTCUTS } from "../shell/Palette";
 import { LeetifyConnect } from "./leetify/LeetifyConnect";
+import { DemosCard, LocalSourceTile } from "./DemosCard";
 
 const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 const dayFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -60,7 +61,7 @@ export default function Settings() {
   const input = useRef<HTMLInputElement>(null);
   const [showSamples, setShow] = useState(samplesShown());
   const hide = useHidePersonal();
-  const counts: Record<SourceId, number> = { recorded: 0, converted: 0, pro: 0, synthetic: 0, valve: 0 };
+  const counts: Record<SourceId, number> = { recorded: 0, converted: 0, pro: 0, synthetic: 0, valve: 0, local: 0 };
   for (const s of matches) counts[sourceOf(s).id]++;
   const bundled = matches.filter((s) => isBundled(s.file)).length;
   const newest = (id: SourceId) => matches.find((s) => sourceOf(s).id === id);
@@ -122,9 +123,12 @@ export default function Settings() {
               <button className="btn press" onClick={() => input.current?.click()}><UploadIcon size={14} />Choose match files</button>
             </div>
             <ValveSource n={counts.valve} />
+            <LocalSourceTile n={counts.local} />
             <ProSource n={counts.pro} />
           </div>
         </Card>
+
+        <DemosCard />
 
         <LeetifyConnect />
 
@@ -142,6 +146,7 @@ export default function Settings() {
                     <th className="c"><span className="th">Recorded</span></th>
                     <th className="c"><span className="th">Converted</span></th>
                     <th className="c"><span className="th">Pro demo</span></th>
+                    <th className="c"><span className="th">Recorded demo</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -151,6 +156,7 @@ export default function Settings() {
                       <td className="c"><Support v={s.recorded} /></td>
                       <td className="c"><Support v={s.converted} /></td>
                       <td className="c"><Support v={s.pro} /></td>
+                      <td className="c"><Support v={s.local} /></td>
                     </tr>
                   ))}
                 </tbody>

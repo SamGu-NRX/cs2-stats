@@ -932,7 +932,8 @@ mod tests {
         let (plan, _) = build(&req(&m, vec![local_clip(3), clip(D1, 3, 1000, 2000)]), &m.env, ID, "t").unwrap();
         let paths: Vec<&str> = plan.demos.iter().map(|d| d.path.as_str()).collect();
         assert_eq!(paths, [m.store().join(L1).display().to_string(), m.replays().join(D1).display().to_string()]);
-        assert_eq!(clip_id_for(DemoRoot::Demos, L1, ME, 3).unwrap(), format!("c-{}-r3", fnv64(&format!("local/20261106T2010Z_de_dust2_abababab|{ME}"))));
+        // the id clips/ids.test.ts gives the same moment
+        assert_eq!(clip_id_for(DemoRoot::Demos, L1, ME, 3).unwrap(), "c-d55e7a31a2fb0768-r3");
         assert_ne!(clip_id_for(DemoRoot::Demos, L1, ME, 3), clip_id_for(DemoRoot::Replays, L1, ME, 3));
         // the same name in the other folder is not there: each root is its own folder
         let e = build(&req(&m, vec![ClipReq { root: DemoRoot::Replays, id: clip_id_for(DemoRoot::Replays, L1, ME, 3).unwrap(), ..local_clip(3) }]), &m.env, ID, "t").unwrap_err();

@@ -4,11 +4,12 @@
 // lists moments but cannot check demos or render.
 import { isTauri } from "../host/host";
 import type { JobRequest, RenderPlan } from "./plan";
+import type { DemoRoot } from "./state";
 
 /** Where a tool is, or why it was not found. */
 export interface Found { path: string | null; error: string | null }
 export interface ClipsEnv { clipsDir: string; cs2: Found; replays: Found; hlae: Found; ffmpeg: Found; font: string | null }
-export interface DemoOnDisk { name: string; path: string | null; size: number }
+export interface DemoOnDisk { root: DemoRoot; name: string; path: string | null; size: number }
 export interface Finished { id: string; path: string; size: number; mtime: number }
 /** HLAE's newest complete recording of a clip: the job, its take folder (take0000 and up), and the video and sound in it. */
 export interface Take { id: string; job: string; take: string; video: string; audio: string | null; mtime: number }
@@ -24,7 +25,8 @@ export interface FinishRequest { id: string; job: string; take: string; reason: 
 export interface ClipsHost {
   /** `hlae`: the HLAE.exe the user chose, if any */
   env(hlae: string | null): Promise<ClipsEnv>;
-  demos(names: string[]): Promise<DemoOnDisk[]>;
+  /** whether each demo is in its folder, as a regular file reached without a link */
+  demos(refs: { root: DemoRoot; name: string }[]): Promise<DemoOnDisk[]>;
   scan(): Promise<ClipsScan>;
   /**
    * builds the job for the chosen clips. With `save`, the review value of the plan the user was shown,
@@ -43,7 +45,7 @@ async function tauriClips(): Promise<ClipsHost> {
   const { invoke } = await import("@tauri-apps/api/core");
   return {
     env: (hlae) => invoke("clips_env", { hlae }),
-    demos: (names) => invoke("clips_demos", { names }),
+    demos: (refs) => invoke("clips_demos", { demos: refs }),
     scan: () => invoke("clips_scan"),
     plan: (request, save) => invoke("clips_plan", { request, save }),
     launch: (job, review) => invoke("clips_launch", { job, review }),

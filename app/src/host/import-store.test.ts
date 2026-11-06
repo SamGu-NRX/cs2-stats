@@ -17,7 +17,7 @@ it("refuses a second import while one runs, and a page mounted later sees it run
   // fails if a second press starts another importer, or Settings forgets a running import after navigating
   // away and back (review of #29)
   const m = manualRun();
-  const store = importStore(m.run, async () => ({ running: false, at: null, last: null }));
+  const store = importStore<ValveProgress, ValveImport>(m.run, async () => ({ running: false, at: null, last: null }));
   const first = store.subscribe(() => {});
   const started = store.start();
   m.step({ event: "start", i: 2, n: 6, demo: "b.dem" });
@@ -36,7 +36,7 @@ it("drops a state answer sent before an import started, so it cannot report the 
   // fails if a superseded idle answer clears a running import (review of #29)
   let answer: (q: Awaited<ReturnType<Parameters<typeof importStore>[1]>>) => void = () => {};
   const m = manualRun();
-  const store = importStore(m.run, () => new Promise((r) => { answer = r; }));
+  const store = importStore<ValveProgress, ValveImport>(m.run, () => new Promise((r) => { answer = r; }));
   const following = store.sync(); // the page mounts and asks the backend
   const started = store.start(); // the user presses the button before the answer is in
   answer({ running: false, at: null, last: null }); // the answer, from before the import
@@ -50,7 +50,7 @@ it("drops a state answer sent before an import started, so it cannot report the 
 it("tells the app an import ended even when no page is subscribed, so it can rescan", async () => {
   // fails if an import that ends while you are on another page leaves the match list stale (review of #29)
   const m = manualRun();
-  const store = importStore(m.run, async () => ({ running: false, at: null, last: null }));
+  const store = importStore<ValveProgress, ValveImport>(m.run, async () => ({ running: false, at: null, last: null }));
   let rescans = 0;
   store.onFinish(() => rescans++); // the app shell, not a page
   const page = store.subscribe(() => {});
@@ -68,7 +68,7 @@ it("follows an import the backend runs that this page did not start, to its end"
     { running: true, at: { event: "start" as const, i: 2, n: 2, demo: "b.dem" }, last: null },
     { running: false, at: { event: "done" as const, i: 2, n: 2, demo: "b.dem", ok: true }, last: OK },
   ];
-  const store = importStore(async () => OK, async () => states.shift()!, 1);
+  const store = importStore<ValveProgress, ValveImport>(async () => OK, async () => states.shift()!, 1);
   const following = store.sync();
   await new Promise((r) => setTimeout(r, 0)); // the first answer is in
   expect(store.get()).toMatchObject({ running: true, at: { i: 1 } });

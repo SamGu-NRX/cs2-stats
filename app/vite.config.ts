@@ -6,7 +6,7 @@ import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { packsFolder } from "./tools/packs-folder";
 import { fileParam, requestUrl } from "./tools/request-param";
-import { importerCommand, listValve, readValve, ValvePathError, valveRoot } from "./tools/valve-folder";
+import { importerCommand, listLocal, listValve, localRoot, readLocal, readValve, ValvePathError, valveRoot } from "./tools/valve-folder";
 import { listPro, proRoot, ProPathError, readPro } from "./tools/pro-folder";
 
 
@@ -156,6 +156,44 @@ function valveFolder(): Plugin {
 }
 
 /**
+ * The recorded demos' tables (tools/valve-folder.ts listLocal), for `vite dev` and `vite preview`; the
+ * desktop app has the same commands in Rust (demos.rs list_local, read_local). GET /__local/list lists
+ * complete matches; GET /__local/file?f=<id>/<version>[/<table>.parquet] returns table names or one
+ * table. The desktop app imports demos itself; the dev server only reads what is there.
+ */
+function localFolder(): Plugin {
+  const handler: Connect.NextHandleFunction = (req, res, next) => {
+    const url = requestUrl(req);
+    if (!url) { res.statusCode = 400; return res.end(); }
+    if (!url.pathname.startsWith("/__local/")) return next();
+    const send = (code: number, body: string | Buffer, type = "application/json") => {
+      res.statusCode = code;
+      res.setHeader("Content-Type", type);
+      res.setHeader("Cache-Control", "no-store");
+      res.end(body);
+    };
+    const root = localRoot();
+    if (!root) return send(404, JSON.stringify({ error: "APPDATA is not set and CS2_LOCAL_MATCHES is not given" }));
+    try {
+      if (url.pathname === "/__local/list") return send(200, JSON.stringify(listLocal(root)));
+      if (url.pathname === "/__local/file") {
+        const rel = fileParam(url.search, "f");
+        if (rel === null) return send(400, JSON.stringify({ error: "malformed file name" }));
+        return send(200, readLocal(root, rel), rel.endsWith(".parquet") ? "application/octet-stream" : "application/json");
+      }
+      return send(404, JSON.stringify({ error: "unknown endpoint" }));
+    } catch (e) {
+      return send(e instanceof ValvePathError ? 400 : 500, JSON.stringify({ error: (e as Error).message }));
+    }
+  };
+  return {
+    name: "cs2-local-folder",
+    configureServer: (s) => { s.middlewares.use(handler); },
+    configurePreviewServer: (s) => { s.middlewares.use(handler); },
+  };
+}
+
+/**
  * The pro match library (tools/pro-folder.ts) for `vite dev` and `vite preview`, from the folder named by
  * CS2_PRO_LIBRARY; the desktop app has the same commands in Rust, over a folder the user picks. GET
  * /__pro/list lists its maps ({ folder: null } without the setting); GET /__pro/file?f=<series>/<map>...
@@ -246,7 +284,7 @@ function devMatches(): Plugin {
 
 export default defineConfig({
   // packsFolder serves the private packs to `vite dev` only, never to `vite preview` (tools/packs-folder.ts)
-  plugins: [react(), matchFolder(), packsFolder(), valveFolder(), proFolder(), devMatches()],
+  plugins: [react(), matchFolder(), packsFolder(), valveFolder(), localFolder(), proFolder(), devMatches()],
   clearScreen: false,
   server: {
     port: 1420,

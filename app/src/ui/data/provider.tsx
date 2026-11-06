@@ -119,8 +119,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
       // An import that ends rescans the matches whichever page is open, and one already running when the
       // app opens is followed to its end (review of #29).
       stopImports.current();
-      stopImports.current = host.imports.onFinish(() => { last.current = 0; forced.current = true; void sync(); });
+      const rescan = () => { last.current = 0; forced.current = true; void sync(); };
+      const stops = [host.imports.onFinish(rescan), host.localImports?.onFinish(rescan) ?? (() => {})];
+      stopImports.current = () => { for (const s of stops) s(); };
       void host.imports.sync();
+      // the desktop app imports recorded demos at start (demos.rs on_app_start); its end rescans
+      void host.localImports?.sync();
       setState((s) => ({ ...s, host, client, meta: true }));
       await sync();
     } catch (e) {

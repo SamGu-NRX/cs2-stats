@@ -9,4 +9,7 @@ it("names a Valve match by its demo folder, so re-extraction keeps the id, and m
   expect(clipId("valve/match730_0001/v-3.1.0-0123abcd", "76561190000000001", 3)).toBe("c-e3fad9374b01f517-r3");
   expect(clipId("valve/match730_0001/v-3.2.0-89abcdef", "76561190000000001", 3)).toBe("c-e3fad9374b01f517-r3");
   expect(() => clipId("valve/x/v", "1", 0)).toThrow(/round number/);
+  // a recorded demo by its id, as job.rs clip_id_for names it from the demos store
+  expect(matchKey("local/20261106T2010Z_de_dust2_abababab/v-1.18.0-0123abcd")).toBe("local/20261106T2010Z_de_dust2_abababab");
+  expect(clipId("local/20261106T2010Z_de_dust2_abababab/v-1.18.0-0123abcd", "76561190000000001", 3)).toBe("c-d55e7a31a2fb0768-r3");
 });

@@ -20,6 +20,7 @@ import "./ui/styles/clips.css";
 import "./ui/styles/leetify.css";
 import "./ui/styles/pro.css";
 import "./ui/styles/botmode.css";
+import "./ui/styles/demos.css";
 
 // Entrance motion is opt-in (views.css, "page enter"): the app turns it on here, so tests and static
 // renders, which never run this file, see every element in its final place.

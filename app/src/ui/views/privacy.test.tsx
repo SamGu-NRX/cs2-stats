@@ -210,7 +210,7 @@ const LEETIFY: LeetifyBridge = {
 function hostWith(valve: ValveFolder, status = failedDemos): Host {
   const imports: ImportStore = { get: () => status, subscribe: () => () => {}, onFinish: () => () => {}, start: async () => {}, sync: async () => {} };
   return {
-    kind: "web", folder: DATA_FOLDER, valve, pro: null, imports, leetify: LEETIFY,
+    kind: "web", folder: DATA_FOLDER, valve, pro: null, local: null, imports, leetify: LEETIFY,
     list: async () => [],
     read: async (file) => { throw new Error(`${DATA_FOLDER}\\${file} could not be read`); },
     importFiles: async () => ({ imported: [], skipped: [] }),
@@ -352,7 +352,7 @@ function clipsOnSentinelMachine(takeOf: string, finished: FinishRequest[]): Clip
       clipsDir, font: "C:/Windows/Fonts/seguisb.ttf", cs2: { path: cs2, error: null }, replays: { path: `${HOME_DIR}\\replays`, error: null },
       hlae: { path: hlae, error: null }, ffmpeg: { path: `${HOME_DIR}\\scoop\\shims\\ffmpeg.exe`, error: null },
     }),
-    demos: async (names) => names.map((name) => ({ name, path: `${HOME_DIR}\\replays\\${name}`, size: 1 })),
+    demos: async (refs) => refs.map(({ root, name }) => ({ root, name, path: `${HOME_DIR}\\replays\\${name}`, size: 1 })),
     scan: async () => ({ finished: [], reels: [], takes: [{ id: takeOf, job: "job-20261026T180405123Z-a1b2c3", take: "take0000", video: `${clipsDir}\\jobs\\x\\video.mp4`, audio: null, mtime: 1 }], waiting: 0 }),
     plan: async (request) => plan(request),
     launch: async () => { throw new Error("the sentinel test never launches"); },

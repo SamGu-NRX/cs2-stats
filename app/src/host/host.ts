@@ -12,7 +12,11 @@
 // The pro match library, a folder the user picks in Data & settings (CS2_PRO_LIBRARY for the dev
 // server), lists as "pro/<series>/<map>[/<version folder>]" (tools/pro-folder.ts; pro.rs on the
 // desktop). The app only reads it.
+// The demos CS2 recorded of the user's Bot Mode matches, extracted, come from
+// %APPDATA%\BotMatchStats\local (tools/valve-folder.ts listLocal; demos.rs on the desktop) as
+// "local/<demo id>/<version folder>". Each names its own player in match.extra.pov.
 
+import type { LocalImport, LocalProgress } from "./demos";
 import { importStore, type ImportQuery, type ImportStore } from "./import-store";
 import { tauriLeetify, type LeetifyBridge } from "./leetify";
 
@@ -52,6 +56,26 @@ export interface ValveFolder {
 
 export const VALVE_FOLDER = String.raw`%APPDATA%\BotMatchStats\valve`;
 export const isValve = (f: string) => f.startsWith("valve/");
+const isLocal = (f: string) => f.startsWith("local/");
+
+/** The recorded demos' tables as last listed: where they are, and folders without a complete match. */
+export interface LocalFolder {
+  folder: string | null;
+  /** why the folder could not be listed at all; the other matches are still listed */
+  error?: string;
+  skipped: { file: string; why: string }[];
+}
+interface LocalListing { folder: string; files: FileEntry[]; skipped: { file: string; why: string }[] }
+
+/** Lists the recorded demos' tables without letting it fail the whole match list, as listValveSafely does. */
+async function listLocalSafely(list: () => Promise<LocalListing | null>): Promise<{ folder: LocalFolder | null; files: FileEntry[] }> {
+  try {
+    const l = await list();
+    return l ? { folder: { folder: l.folder, skipped: l.skipped }, files: l.files } : { folder: null, files: [] };
+  } catch (e) {
+    return { folder: { folder: null, error: e instanceof Error ? e.message : String(e), skipped: [] }, files: [] };
+  }
+}
 const isProLibrary = (f: string) => f.startsWith("pro/");
 
 /** The pro match library as last listed. */
@@ -99,6 +123,13 @@ export interface Host {
   readonly valve: ValveFolder | null;
   /** The pro match library from the last list(), or null when this host has none. */
   readonly pro: ProFolder | null;
+  /** The recorded demos' tables from the last list(), or null when this host has none. */
+  readonly local: LocalFolder | null;
+  /**
+   * The desktop app's import of recorded demos (demos.rs import_local), which the app also runs itself
+   * at start and a Bot Mode supervisor runs when a session ends. Absent in the browser.
+   */
+  readonly localImports?: ImportStore<LocalProgress, LocalImport>;
   /**
    * Picks the pro match library with the system's folder picker and keeps it for later starts; resolves
    * the folder, or null when the user cancels. Absent where the folder comes from the environment (the
@@ -165,7 +196,8 @@ async function tauriHost(): Promise<Host> {
   let folder: string | null = null;
   let valve: ValveFolder | null = null;
   let pro: ProFolder | null = null;
-  const imports = importStore(async (onProgress) => {
+  let local: LocalFolder | null = null;
+  const imports = importStore<ValveProgress, ValveImport>(async (onProgress) => {
     const stop = await listen<ValveProgress>("valve-import-progress", (e) => onProgress(e.payload));
     try {
       return await invoke<ValveImport>("import_valve");
@@ -173,6 +205,14 @@ async function tauriHost(): Promise<Host> {
       stop();
     }
   }, () => invoke("valve_import_state"));
+  const localImports = importStore<LocalProgress, LocalImport>(async (onProgress) => {
+    const stop = await listen<LocalProgress>("local-import-progress", (e) => onProgress(e.payload));
+    try {
+      return await invoke<LocalImport>("import_local");
+    } finally {
+      stop();
+    }
+  }, () => invoke("local_import_state"));
   const smoke = await invoke<boolean>("smoke_test");
   return {
     kind: "tauri",
@@ -180,6 +220,8 @@ async function tauriHost(): Promise<Host> {
     get folder() { return folder; },
     get valve() { return valve; },
     get pro() { return pro; },
+    get local() { return local; },
+    localImports,
     chooseProLibrary: () => invoke<string | null>("choose_pro_library"),
     forgetProLibrary: () => invoke<void>("forget_pro_library"),
     imports,
@@ -191,11 +233,14 @@ async function tauriHost(): Promise<Host> {
       valve = v.folder;
       const p = await listProSafely(() => invoke<ProListing>("list_pro"));
       pro = p.folder;
-      const files = [...l.files, ...v.files, ...p.files];
+      const d = await listLocalSafely(() => invoke<LocalListing>("list_local"));
+      local = d.folder;
+      const files = [...l.files, ...v.files, ...d.files, ...p.files];
       return samplesShown() ? [...files, ...(await sampleEntries())] : files;
     },
     read: (file) => (isSample(file) ? readSample(file)
       : isValve(file) ? invoke<ArrayBuffer>("read_valve", { path: file.slice("valve/".length) })
+      : isLocal(file) ? invoke<ArrayBuffer>("read_local", { path: file.slice("local/".length) })
       : isProLibrary(file) ? invoke<ArrayBuffer>("read_pro", { path: file.slice("pro/".length) })
       : invoke<ArrayBuffer>("read_match", { file })),
     async readPack(name) {
@@ -248,6 +293,15 @@ async function webValve(): Promise<ValveListing | null> {
   return (await res.json()) as ValveListing;
 }
 
+/** The recorded demos' tables from the dev or preview server; none without the endpoint. */
+async function webLocal(): Promise<LocalListing | null> {
+  let res: Response;
+  try { res = await fetch("/__local/list"); } catch { return null; }
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(((await res.json()) as { error: string }).error);
+  return (await res.json()) as LocalListing;
+}
+
 /** Runs the importer through the dev server, which streams one JSON line per event (vite.config.ts valveFolder). */
 async function webImportValve(onProgress: (p: ValveProgress) => void): Promise<ValveImport> {
   const res = await fetch("/__valve/import", { method: "POST" });
@@ -281,15 +335,17 @@ function webHost(): Host {
   let folder: string | null = null;
   let valve: ValveFolder | null = null;
   let pro: ProFolder | null = null;
-  const imports = importStore(webImportValve, webImportState);
+  let local: LocalFolder | null = null;
+  const imports = importStore<ValveProgress, ValveImport>(webImportValve, webImportState);
   return {
     kind: "web",
     get folder() { return folder; },
     get valve() { return valve; },
     get pro() { return pro; },
+    get local() { return local; },
     imports,
     async list() {
-      const local = [...picked].map(([file, f]) => ({ file, size: f.size, mtime: f.lastModified }));
+      const picks = [...picked].map(([file, f]) => ({ file, size: f.size, mtime: f.lastModified }));
       // The dev and preview servers expose the match folder; a static build has no such endpoint.
       let recorded: FileEntry[] = [];
       let failed: string | null = null;
@@ -309,13 +365,16 @@ function webHost(): Host {
       valve = v.folder;
       const p = await listProSafely(webPro);
       pro = p.folder;
-      return [...local, ...recorded, ...v.files, ...p.files, ...(await devEntries()), ...(samplesShown() ? await sampleEntries() : [])];
+      const d = await listLocalSafely(webLocal);
+      local = d.folder;
+      return [...picks, ...recorded, ...v.files, ...d.files, ...p.files, ...(await devEntries()), ...(samplesShown() ? await sampleEntries() : [])];
     },
     async read(file) {
       const p = picked.get(file);
       if (p) return p.arrayBuffer();
       if (isSample(file)) return readSample(file);
       if (isValve(file)) return fetchBytes(`/__valve/file?f=${encodeURIComponent(file.slice("valve/".length))}`, file);
+      if (isLocal(file)) return fetchBytes(`/__local/file?f=${encodeURIComponent(file.slice("local/".length))}`, file);
       if (isProLibrary(file)) return fetchBytes(`/__pro/file?f=${encodeURIComponent(file.slice("pro/".length))}`, file);
       if (file.startsWith("dev/")) return fetchBytes(`/__dev-matches/file?f=${encodeURIComponent(file.slice(4))}`, file);
       return fetchBytes(`/__matches/file?f=${encodeURIComponent(file)}`, file);

@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { clipsHost, savedHlae, saveHlae, type ClipsEnv, type ClipsHost, type Take } from "../../clips/host";
 import { jobRequest, type JobRequest, type RenderPlan } from "../../clips/plan";
-import { clipState, demoSource, ROUND_IMPACT_TIP, STATE_LABEL, type ClipState, type DemoSource, type Lookup } from "../../clips/state";
+import { clipState, demoKey, demoSource, ROUND_IMPACT_TIP, STATE_LABEL, type ClipState, type DemoRoot, type DemoSource, type Lookup } from "../../clips/state";
 import type { MomentRow } from "../../worker/protocol";
 import { ClutchBadge, MapThumb, MultiBadge } from "../components/bits";
 import { Segmented } from "../components/controls";
@@ -57,10 +57,10 @@ const hideClipText = (s: string) => hideText(s).replace(DEMO_NAME, (m) => hideFi
 interface Tools { host: ClipsHost | null; env: ClipsEnv | null; lookup: Lookup; error: string | null; checking: boolean }
 
 /** The clips host, the tools it found, which demos are on disk and what the clips folder holds; `recheck` asks again. */
-function useClipTools(names: string[], hlae: string | null): Tools & { recheck: () => void } {
+function useClipTools(refs: { root: DemoRoot; name: string }[], hlae: string | null): Tools & { recheck: () => void } {
   const [n, setN] = useState(0);
   const [st, setSt] = useState<Tools>({ host: null, env: null, lookup: { demos: null, scan: null, why: null }, error: null, checking: true });
-  const key = names.join("|");
+  const key = refs.map(demoKey).join("|");
   useEffect(() => {
     let alive = true;
     // the host, once found, stays even when a call below fails: the desktop app is still the desktop app
@@ -70,13 +70,13 @@ function useClipTools(names: string[], hlae: string | null): Tools & { recheck: 
       const host = (found = await clipsHost());
       if (!host) return { host, env: null, lookup: { demos: null, scan: null, why: "Demos are checked by the desktop app." }, error: null };
       // each check stands alone: a failed scan still leaves the tools and the demos known, so moments stay renderable
-      const [env, scan, demoList] = await Promise.allSettled([host.env(hlae), host.scan(), names.length ? host.demos(names) : Promise.resolve([])]);
+      const [env, scan, demoList] = await Promise.allSettled([host.env(hlae), host.scan(), refs.length ? host.demos(refs) : Promise.resolve([])]);
       const failed = [env, scan].flatMap((r) => (r.status === "rejected" ? [String(r.reason)] : []));
       return {
         host,
         env: env.status === "fulfilled" ? env.value : null,
         lookup: {
-          demos: demoList.status === "fulfilled" ? new Map(demoList.value.map((d) => [d.name, d])) : null,
+          demos: demoList.status === "fulfilled" ? new Map(demoList.value.map((d) => [demoKey(d), d])) : null,
           scan: scan.status === "fulfilled" ? scan.value : null,
           why: demoList.status === "rejected" ? `Demos could not be checked: ${String(demoList.reason)}` : null,
         },
@@ -226,7 +226,7 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
   // the moments chosen when the dialog opened, so the plan is asked for again only when the tools change
   const ready = useMemo(() => items.filter((i) => i.state.kind === "ready" && i.src.kind === "demo"), [items]);
   const request = useMemo(() => (env?.hlae.path
-    ? jobRequest(ready.map((i) => ({ ...i.row, demo: (i.src as Extract<DemoSource, { kind: "demo" }>).name })), env.hlae.path)
+    ? jobRequest(ready.map((i) => { const d = i.src as Extract<DemoSource, { kind: "demo" }>; return { ...i.row, demo: d.name, root: d.root }; }), env.hlae.path)
     : null), [env, ready]);
   // the host builds the plan without writing anything, for the user to read before Save or Launch. A
   // plan counts only for the request it was built for: when the tools or the HLAE path change, the old
@@ -359,10 +359,15 @@ export default function ClipsView() {
   const call = useCall("moments", q ? [q] : null);
   const rows = call.stale ? null : call.data;
   const sources = useMemo(() => new Map(list.map((e) => [e.file, demoSource(e)])), [list]);
-  const names = useMemo(() => [...new Set([...sources.values()].flatMap((s) => (s.kind === "demo" ? [s.name] : [])))].sort(), [sources]);
+  // each demo once, in a fixed order, so the lookup is asked again only when the set changes
+  const refs = useMemo(() => {
+    const by = new Map<string, { root: DemoRoot; name: string }>();
+    for (const s of sources.values()) if (s.kind === "demo") by.set(demoKey(s), { root: s.root, name: s.name });
+    return [...by].sort((a, b) => a[0].localeCompare(b[0])).map(([, r]) => r);
+  }, [sources]);
   const [hlae, setHlaeState] = useState(() => savedHlae() ?? "");
   const setHlae = (p: string) => { setHlaeState(p); saveHlae(p); };
-  const tools = useClipTools(names, hlae || null);
+  const tools = useClipTools(refs, hlae || null);
   const [show, setShow] = useState<Show>("all");
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [dialog, setDialog] = useState<{ instant: boolean; items: Item[] } | null>(null);

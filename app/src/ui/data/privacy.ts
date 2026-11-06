@@ -145,7 +145,7 @@ export const STEAMID_HIDDEN = "<SteamID>";
  * The folders Data & settings shows once the host has resolved them. Before that it shows them as
  * %APPDATA%\BotMatchStats\..., which holds nothing personal and stays.
  */
-export const FOLDER_HIDDEN = { data: "<data folder>", valve: "<Valve folder>", pro: "<pro library folder>" } as const;
+export const FOLDER_HIDDEN = { data: "<data folder>", valve: "<Valve folder>", pro: "<pro library folder>", demos: "<demos folder>" } as const;
 
 // A path ends at a quote, a bracket or a character no file name can hold. Folder names may contain
 // spaces, so a path runs to its last separator on the line, then to the end of its last name, which

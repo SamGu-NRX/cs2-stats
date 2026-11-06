@@ -1,23 +1,24 @@
-// The Valve import's state, kept outside any component so it survives navigation: Settings shows an
-// import that is running when it mounts, the host runs at most one at a time, and the app rescans when
-// one ends, whichever page is open (review of #29).
+// An import's state (the Valve import, and the recorded demos' on the desktop), kept outside any
+// component so it survives navigation: Settings shows an import that is running when it mounts, the
+// host runs at most one at a time, and the app rescans when one ends, whichever page is open (review
+// of #29).
 import type { ValveImport, ValveProgress } from "./host";
 
-export interface ImportStatus {
+export interface ImportStatus<P = ValveProgress, R = ValveImport> {
   running: boolean;
   /** the last progress line of the running (or last) import */
-  at: ValveProgress | null;
+  at: P | null;
   /** the last import's end */
-  last: ValveImport | null;
+  last: R | null;
   /** why the last import could not start or did not report an end */
   error: string | null;
 }
 
 /** What the backend says, for an import this page did not start (one started before a reload). */
-export type ImportQuery = () => Promise<{ running: boolean; at: ValveProgress | null; last: ValveImport | null }>;
+export type ImportQuery<P = ValveProgress, R = ValveImport> = () => Promise<{ running: boolean; at: P | null; last: R | null }>;
 
-export interface ImportStore {
-  get(): ImportStatus;
+export interface ImportStore<P = ValveProgress, R = ValveImport> {
+  get(): ImportStatus<P, R>;
   subscribe(listener: () => void): () => void;
   /** Called once each time an import ends (with a result or an error), whether or not a page is subscribed. */
   onFinish(listener: () => void): () => void;
@@ -27,21 +28,19 @@ export interface ImportStore {
   sync(): Promise<void>;
 }
 
-const IDLE: ImportStatus = { running: false, at: null, last: null, error: null };
-
-export function importStore(run: (onProgress: (p: ValveProgress) => void) => Promise<ValveImport>, query: ImportQuery, pollMs = 1000): ImportStore {
-  let status = IDLE;
+export function importStore<P = ValveProgress, R = ValveImport>(run: (onProgress: (p: P) => void) => Promise<R>, query: ImportQuery<P, R>, pollMs = 1000): ImportStore<P, R> {
+  let status: ImportStatus<P, R> = { running: false, at: null, last: null, error: null };
   let following = false;
   // Every start and every sync takes a new operation number; an answer for an older one is dropped, so a
   // state query sent before an import started cannot report it idle (review of #29).
   let op = 0;
   const listeners = new Set<() => void>();
   const finished = new Set<() => void>();
-  const set = (next: Partial<ImportStatus>) => {
+  const set = (next: Partial<ImportStatus<P, R>>) => {
     status = { ...status, ...next };
     for (const l of listeners) l();
   };
-  const finish = (next: Partial<ImportStatus>) => {
+  const finish = (next: Partial<ImportStatus<P, R>>) => {
     set({ ...next, running: false });
     for (const l of finished) l();
   };

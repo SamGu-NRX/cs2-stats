@@ -69,7 +69,7 @@ const host: ClipsHost = {
     cs2: { path: "D:\\Steam\\cs2.exe", error: null }, replays: { path: "D:\\replays", error: null },
     hlae: { path: hlae ?? HLAE, error: null }, ffmpeg: { path: "D:\\Tools\\ffmpeg.exe", error: null },
   }),
-  demos: async (names) => names.map((name) => ({ name, path: `D:\\replays\\${name}`, size: 1 })),
+  demos: async (refs) => refs.map(({ root, name }) => ({ root, name, path: `D:\\${root}\\${name}`, size: 1 })),
   scan: async () => {
     if (scanFails) throw new Error(scanFails);
     scans++;
@@ -127,7 +127,7 @@ describe("the Clips page", () => {
     expect(rows.map((r) => [r.querySelector(".clip__rank")!.textContent, r.querySelector(".cstate")!.textContent])).toEqual([["1", "Ready to render"], ["2", "Rendered"], ["3", "Needs a demo"]]);
     expect(rowOf("1v2 clutch, +51% round impact").querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
     expect(rowOf("3K on B Site, +30% round impact").querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
-    expect(el.querySelector(".clips__whys")!.textContent).toMatch(/1 moment needs a demo\. The plugin records match data, not a demo/);
+    expect(el.querySelector(".clips__whys")!.textContent).toMatch(/1 moment needs a demo\. No demo of this match was recorded\. Bot Mode records one when Record demos \(GOTV\) is on/);
     // what round impact means: on the reason, and once on the page for keyboard and screen-reader users
     expect(rowOf("3K on B Site, +30% round impact").querySelector(".clip__reason")!.getAttribute("data-tip")).toMatch(/can pass 100%/);
     expect(el.querySelector(".clips__head")!.textContent).toMatch(/Round impact adds up/);
@@ -193,7 +193,7 @@ describe("the Clips page", () => {
     // counted (formal/ClipsLaunchUserSession): the dialog and the waiting note both say to keep CS2 closed
     expect(dlg.querySelector(".rdlg__warn")!.textContent).toContain("keep it closed until this page stops waiting for it");
     expect(dlg.querySelector(".rdlg__cmd")!.textContent).toMatch(/^& '.*HLAE\.exe' '-noGui' .* '-cmdLine' '-insecure /);
-    expect(planned).toEqual([{ save: null, request: { hlae: HLAE, clips: [{ id: READY, demo: "match730_0001.dem", steamid: ME, round: 3, startTick: 1000, endTick: 1960, tickRate: 64, reason: "3K on B Site, +30% round impact" }] } }]);
+    expect(planned).toEqual([{ save: null, request: { hlae: HLAE, clips: [{ id: READY, demo: "match730_0001.dem", root: "replays", steamid: ME, round: 3, startTick: 1000, endTick: 1960, tickRate: 64, reason: "3K on B Site, +30% round impact" }] } }]);
     expect(launched).toEqual([]);
     await click(button(dlg, "Launch CS2 with -insecure"));
     // the save and the launch both carry the review value of the plan shown

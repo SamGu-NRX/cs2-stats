@@ -2,10 +2,14 @@
 // must stay the same across rescans and re-extractions, so a rendered clip keeps its moment, and it
 // must not hold a file name or SteamID, since it ends up in paths the app shows.
 
-/** The part of a match file path that survives re-extraction: a Valve match's demo folder ("valve/<demo>"), else the path. */
+/**
+ * The part of a match file path that survives re-extraction: a Valve match's demo folder
+ * ("valve/<demo>") or a recorded demo's id ("local/<id>"), else the path. src-tauri clips/job.rs
+ * clip_id_for builds the same key from the demo's folder and name.
+ */
 export function matchKey(file: string): string {
-  const m = /^valve\/([^/]+)\//.exec(file);
-  return m ? `valve/${m[1]}` : file;
+  const m = /^(valve|local)\/([^/]+)\//.exec(file);
+  return m ? `${m[1]}/${m[2]}` : file;
 }
 
 /** 64 bits of FNV-1a over the text's UTF-16 code units, as 16 hex digits. */

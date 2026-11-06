@@ -20,6 +20,7 @@ import { RefreshIcon, SearchIcon } from "./icons/ui";
 import { go, isTextEntry, matchFile, matchHref, matchTabOfKey, navWasPointer, pageHref, profileHref, PROFILE_TABS, scopeQuery, useRoute, currentRoute } from "./router";
 import { HomeView } from "./views/Home";
 import { MatchesView } from "./views/Matches";
+import { DemoKeeper } from "./shell/DemoKeeper";
 
 const MatchView = lazy(() => import("./views/match/MatchView"));
 const ProfileView = lazy(() => import("./views/Profile"));
@@ -183,6 +184,8 @@ export function Shell() {
       <Palette open={palette} onClose={() => setPalette(false)} actions={actions} />
       <TooltipLayer />
       <ToastLayer />
+      {/* the engine's keep decisions for the recorded demos, after every sync (shell/DemoKeeper.tsx) */}
+      <DemoKeeper />
       <BotModeRecovery />
       <MenuLayer />
     </div>
