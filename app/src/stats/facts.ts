@@ -18,11 +18,15 @@ import type { Side } from "./tables";
 // 36: kill facts carry the killer's place and sightings the kill tick, for clip moments (stats/moments.ts)
 // 37: kill facts carry their duel groups (aGroup, vGroup) and player-rounds their freeze-end group (ecoGroup)
 // 38: KAST's survival (the scoreboard's and the eco-adjusted) does not end at a world death (rules.ts worldDeath)
-// 39: plugin files credit what a human does in a takeover bot's body to the bot (plugin/bodies.ts) and
-// rebuild the null winners of overtime and unknown result codes from the scores (plugin/results.ts)
-// 40: kill facts name the human driving a takeover body (killerController, victimController), and
+// 39: used by a preview build of the takeover-credit change (#91), so its cached facts are not reused
+// 40: a plugin player whose start side is null is on no team (plugin/adapter.ts teamOf); before, a null
+// start side compared equal to the human's null side and could put a bot on a team it never joined
+// 41: plugin files credit what a human does in a takeover bot's body to the bot, through one body
+// timeline with a no-body state (plugin/bodies.ts), and rebuild the null winners of overtime and unknown
+// result codes from the scores (plugin/results.ts)
+// 42: kill facts name the human driving a takeover body (killerController, victimController), and
 // player-rounds count the kills, deaths and damage moved by a takeover (the takeover and driven measures)
-export const DERIVE_VERSION = 40;
+export const DERIVE_VERSION = 42;
 
 export interface MatchInfo {
   id: string;

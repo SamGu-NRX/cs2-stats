@@ -48,7 +48,8 @@ export interface Players {
   key: string[];
   name: string[];
   isBot: boolean[];
-  startSide: Side[];
+  /** null for a player who never had a side, as in a session no match was played in */
+  startSide: (Side | null)[];
 }
 
 export interface Rounds {
@@ -360,7 +361,7 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
     }
   }
   if (m.throws !== undefined) checkTable(where, m.throws, "throws");
-  if (m.takeovers !== undefined) checkTakeovers(where, m.takeovers, m.players as Players, rounds, human);
+  if (m.takeovers !== undefined) checkTakeovers(where, m.takeovers, m as unknown as MatchFile);
   decodePositions(m.pos as Pos);
   const ffr = m.firstFullRound as number;
   if (ffr < 0 || ffr > nRounds) throw new SchemaError(where, `firstFullRound ${ffr} is outside 0..${nRounds}`);
@@ -370,24 +371,45 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
 /**
  * Takeover rows must name a round, a tick inside it, the human and a bot's body (or null), so a bad
  * row fails here rather than crediting the wrong player (SCHEMA.md: only the human takes over a bot).
- * A round's ticks run from freeze end to its end tick; a body that dies on the end tick ends its
- * takeover at end + 1. A round with no recorded freeze end or length has no range to check against.
+ *
+ * A takeover starts after a death in the live round, so no row comes before the round's freeze end.
+ * Its end row is stamped at the body's death tick + 1, and the plugin keeps recording deaths after
+ * round_end until the next round begins (plugin/Core/Recorder.cs Kill checks RoundActive, which only
+ * BeginRound clears): the bomb's blast kills 1 to 22 ticks after the end. So a row may come as late
+ * as the next round's freeze end. In the last round, which has none, the bound is the latest of the
+ * end tick plus the plugin's finalize delay (round_end + one second, run from a 0.25 s timer:
+ * plugin/Game/Events.cs OnRoundEnd, BotMatchStatsPlugin Housekeeping) and the tick after the round's
+ * last recorded death. A round with no recorded freeze end has nothing to check against, and one with
+ * no recorded length checks only the lower bound.
  */
-function checkTakeovers(where: string, table: unknown, players: Players, rounds: Rounds, human: number): void {
+function checkTakeovers(where: string, table: unknown, m: MatchFile): void {
   const n = checkTable(where, table, "takeovers");
   const t = table as Takeovers;
+  const { players, rounds, human } = m;
   const nPlayers = players.key.length;
   const nRounds = rounds.winSide.length;
+  const rate = m.env.tickrate || 64;
   const index = (x: unknown, size: number) => Number.isInteger(x) && (x as number) >= 0 && (x as number) < size;
+  const lastDeath = new Map<number, number>();
+  m.kills.ri.forEach((ri, i) => lastDeath.set(ri, Math.max(lastDeath.get(ri) ?? -Infinity, m.kills.tick[i])));
+  /** the latest tick a takeovers row of round ri may carry, or null when the file does not bound it */
+  const latest = (ri: number): number | null => {
+    const next = ri + 1 < nRounds ? rounds.freezeTick[ri + 1] : null;
+    if (next !== null) return next;
+    const fe = rounds.freezeTick[ri];
+    const dur = rounds.durTicks[ri];
+    if (fe === null || dur === null) return null;
+    return Math.max(fe + dur + rate + Math.ceil(rate / 4), (lastDeath.get(ri) ?? -Infinity) + 1);
+  };
   for (let i = 0; i < n; i++) {
     const ri = t.ri[i];
     if (!index(ri, nRounds)) throw new SchemaError(where, `takeovers.ri[${i}] is ${JSON.stringify(ri)}, expected a round index 0..${nRounds - 1}`);
-    if (!Number.isInteger(t.tick[i])) throw new SchemaError(where, `takeovers.tick[${i}] is ${JSON.stringify(t.tick[i])}, expected an integer tick`);
+    const tick = t.tick[i];
+    if (!Number.isInteger(tick)) throw new SchemaError(where, `takeovers.tick[${i}] is ${JSON.stringify(tick)}, expected an integer tick`);
     const fe = rounds.freezeTick[ri];
-    const dur = rounds.durTicks[ri];
-    if (fe !== null && dur !== null && (t.tick[i] < fe || t.tick[i] > fe + dur + 1)) {
-      throw new SchemaError(where, `takeovers.tick[${i}] is ${t.tick[i]}, outside round ${ri}'s ticks ${fe}..${fe + dur + 1}`);
-    }
+    if (fe !== null && tick < fe) throw new SchemaError(where, `takeovers.tick[${i}] is ${tick}, before round ${ri}'s freeze end ${fe}`);
+    const last = fe === null ? null : latest(ri);
+    if (last !== null && tick > last) throw new SchemaError(where, `takeovers.tick[${i}] is ${tick}, after round ${ri}'s last tick ${last}`);
     if (t.pi[i] !== human) throw new SchemaError(where, `takeovers.pi[${i}] is ${JSON.stringify(t.pi[i])}, expected the human's index ${human}`);
     const body = t.body[i];
     if (body !== null && (!index(body, nPlayers) || !players.isBot[body])) {

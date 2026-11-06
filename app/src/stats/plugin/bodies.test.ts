@@ -178,9 +178,42 @@ describe("rows made in a bot's body", () => {
     expect([t.kills.attacker_steamid, t.kills.victim_steamid.map((x) => NAME[x])]).toEqual([["BOT_E1", null], ["H", "E2"]]);
   });
 
-  it("stay the human's in a round where he died in his own body more than once (a respawn mode)", () => {
-    // fails if the deathmatch-like sessions, where a death respawns the human, lose his damage after his first death
-    expect(hits(round([[1150, E1, H, null, null], [1500, E1, H, null, null]], [[1300, H, E2]]))).toEqual(["1300 H>E2"]);
+  it("resume the human's own body at a respawn, shown by his next alive position row", () => {
+    // fails if one death ends his own body for the round in a session that respawns him, or if a death
+    // with no alive row after it is read as a respawn: he dies at 1150, is seen alive at 1300, dies
+    // again at 1500. 1200 is in no body; 1300 and 1400 are his; 1600 is in no body
+    const alive = (ticks: number[]): MatchFile["pos"] => ({ ri: ticks.map(() => 0), tick: ticks, pi: ticks.map(() => H), x: ticks.map(() => 0), y: ticks.map(() => 0), z: ticks.map(() => 0), place: ticks.map(() => null), alive: ticks.map(() => true) });
+    const kills: Kill[] = [[1150, E1, H, null, null], [1500, E1, H, null, null]];
+    const shots: Hit[] = [[1200, H, E2], [1300, H, E2], [1400, H, E2], [1600, H, E2]];
+    expect(hits(round(kills, shots, { pos: alive([1100, 1300]) }))).toEqual(["1300 H>E2", "1400 H>E2"]);
+    expect(hits(round(kills.slice(0, 1), shots, { pos: alive([1100]) }))).toEqual([]);
+  });
+
+  it("use the timeline for a kill whose kBody or vBody entry is missing, and keep an explicit entry", () => {
+    // fails if an absent or short column falls back to the controller: the takeovers table puts the
+    // human in A from 1151 to 1400, so his kill at 1300 and his death at 1400 are A's; an explicit kBody
+    // of B on the kill outranks the table
+    const kills: Kill[] = [[1150, E1, H, null, null], [1300, H, E2, null, null], [1400, E1, H, null, null]];
+    const t = (k: Partial<MatchFile["kills"]>) => {
+      const m = round(kills, [], { takeovers: { ri: [0, 0], tick: [1151, 1401], pi: [H, H], body: [A, null] } });
+      m.kills = { ...m.kills, kBody: undefined, vBody: undefined, ...k };
+      const x = pluginToTables(m).kills;
+      return x.attacker_steamid.map((a, i) => `${NAME[a!]}>${NAME[x.victim_steamid[i]]}`);
+    };
+    expect(t({})).toEqual(["E1>H", "A>E2", "E1>A"]);
+    expect(t({ kBody: [null], vBody: [null] })).toEqual(["E1>H", "A>E2", "E1>A"]);
+    expect(t({ kBody: [null, B, null], vBody: [null, null, null] })).toEqual(["E1>H", "B>E2", "E1>H"]);
+  });
+
+  it("give grenade damage with no grenade link a bot body only once the file has named that bot", () => {
+    // fails if HE damage whose damage.nade is null is read at its hit tick like a bullet: A starts the
+    // tick after the human's death at 1150 but is first named by his kill at 1300, so the HE hit at 1250
+    // is left out while a bullet at 1250 is A's, and an HE hit at 1350 is A's
+    const kills: Kill[] = [[1150, E1, H, null, null], [1300, H, E1, A, null], [1400, E2, H, null, A]];
+    const m = round(kills, [[1250, H, E2], [1250, H, E2], [1350, H, E2]]);
+    m.damage.weapon = [1, 0, 1];
+    expect(hits(m)).toEqual(["1250 A>E2", "1350 A>E2"]);
+    expect(pluginToTables(m).damages.weapon).toEqual(["ak47", "hegrenade"]);
   });
 });
 
@@ -235,16 +268,45 @@ describe("the takeovers table (plugin 1.3.0)", () => {
     expect(hits(m)).toEqual(["1500 B>E1"]);
   });
 
-  it("rejects a row for another player, a body that is not a bot, or a tick outside the round", () => {
+  it("rejects a row for another player or a body that is not a bot", () => {
     // fails if a malformed row loads and credits the wrong player
     const bad = (t: Takeovers) => () => validateMatch(round([], [], { takeovers: t }), "t.json.gz");
     expect(bad(takeovers([[1151, A]]))).not.toThrow();
     expect(bad(takeovers([[1151, H]]))).toThrow("takeovers.body[0] is 0, expected null or a bot's index");
     expect(bad(takeovers([[1151, 9]]))).toThrow("takeovers.body[0] is 9, expected null or a bot's index");
     expect(bad({ ...takeovers([[1151, B]]), pi: [A] })).toThrow("takeovers.pi[0] is 1, expected the human's index 0");
-    expect(bad(takeovers([[999, A]]))).toThrow("takeovers.tick[0] is 999, outside round 0's ticks 1000..5001");
-    expect(bad(takeovers([[5001, null]]))).not.toThrow();
-    expect(bad(takeovers([[5002, null]]))).toThrow("takeovers.tick[0] is 5002, outside round 0's ticks 1000..5001");
     expect(bad({ ri: [0], tick: [1], pi: [H] } as unknown as Takeovers)).toThrow('column "takeovers.body" is missing or not an array');
+  });
+
+  it("accepts an end row after a bomb blast past the round's end, and bounds rows by the round's ticks", () => {
+    // fails if a real 1.3.0 file is rejected: A, driven by the human, dies to the bomb at 5022, after
+    // the round's end at 5000, and the plugin stamps the end row at 5023. Rows may run to the next
+    // round's freeze end, or in the last round to the end plus the plugin's finalize delay (5080 at 64
+    // ticks/s) or the tick after its last death; no row comes before freeze end, known length or not
+    const blast: Kill[] = [[1150, E1, H, null, null], [5022, null as unknown as number, H, null, A]];
+    const check = (rows: [number, number | null][], o: { kills?: Kill[]; next?: number; noLength?: boolean } = {}) => () => {
+      const m = round(o.kills ?? [], [], { takeovers: takeovers(rows) });
+      m.env.plugin = "1.3.0";
+      if (o.noLength) m.rounds.durTicks = [null];
+      if (o.next !== undefined) {
+        const R = m.rounds as unknown as Record<string, unknown[]>;
+        for (const k of Object.keys(R)) R[k] = [...R[k], R[k][0]];
+        m.rounds.freezeTick = [1000, o.next];
+      }
+      return validateMatch(m, "t.json.gz");
+    };
+    expect(check([[1151, A], [5023, null]], { kills: blast })).not.toThrow();
+    expect(check([[1151, A], [5023, null]], { kills: blast, next: 7000 })).not.toThrow();
+    expect(check([[1151, A], [5080, null]])).not.toThrow();
+    expect(check([[1151, A], [5081, null]])).toThrow("takeovers.tick[1] is 5081, after round 0's last tick 5080");
+    // a kill after round_end but before the next round, past the finalize delay, still ends a takeover
+    const late: Kill[] = [[1150, E1, H, null, null], [5200, E1, H, null, A]];
+    expect(check([[1151, A], [5201, null]], { kills: late })).not.toThrow();
+    expect(check([[1151, A], [5202, null]], { kills: late })).toThrow("takeovers.tick[1] is 5202, after round 0's last tick 5201");
+    expect(check([[1151, A], [7000, null]], { next: 7000 })).not.toThrow();
+    expect(check([[1151, A], [7001, null]], { next: 7000 })).toThrow("takeovers.tick[1] is 7001, after round 0's last tick 7000");
+    expect(check([[999, A]])).toThrow("takeovers.tick[0] is 999, before round 0's freeze end 1000");
+    expect(check([[999, A]], { noLength: true })).toThrow("takeovers.tick[0] is 999, before round 0's freeze end 1000");
+    expect(check([[9999, A]], { noLength: true })).not.toThrow();
   });
 });
