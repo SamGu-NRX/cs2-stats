@@ -21,7 +21,10 @@ import type { Side } from "./tables";
 // 39: used by a preview build of the takeover-credit change (#91), so its cached facts are not reused
 // 40: a plugin player whose start side is null is on no team (plugin/adapter.ts teamOf); before, a null
 // start side compared equal to the human's null side and could put a bot on a team it never joined
-export const DERIVE_VERSION = 40;
+// 41: plugin files credit what a human does in a takeover bot's body to the bot, through one body
+// timeline with a no-body state (plugin/bodies.ts), and rebuild the null winners of overtime and unknown
+// result codes from the scores (plugin/results.ts)
+export const DERIVE_VERSION = 41;
 
 export interface MatchInfo {
   id: string;

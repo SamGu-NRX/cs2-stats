@@ -13,9 +13,10 @@
 // error, target and on-screen state go to the shots columns only plugin rows fill (tables.ts
 // SOURCE_COLUMNS).
 import { emptyTable, kindOf, SCHEMA, type MatchTables, type Side, type Table, type TableName } from "../tables";
-import type { GrenadeType, MatchFile } from "./schema";
+import { bodyEntry, bodyLookup } from "./bodies";
+import { roundResults, teamSides } from "./results";
+import { GRENADE_WEAPONS, KILL_FLAG as FLAG, type GrenadeType, type MatchFile, type Side as SideCode } from "./schema";
 
-const FLAG = { headshot: 1, wallbang: 2, smoke: 4, blind: 8, noscope: 16, air: 32, suicide: 64, freeze: 128 } as const;
 const SIDE: Record<number, Side> = { 2: "T", 3: "CT" };
 const THROW_CLASS: Record<GrenadeType | "incgrenade", string> = {
   he: "hegrenade", flash: "flashbang", smoke: "smokegrenade", molotov: "molotov", incgrenade: "incgrenade", decoy: "decoy",
@@ -40,12 +41,13 @@ function add<N extends TableName>(t: Table<N>, name: N, values: Record<string, u
 const HITGROUP: Record<number, string> = { 1: "head", 2: "chest", 3: "stomach", 4: "left_arm", 5: "right_arm", 6: "left_leg", 7: "right_leg", 8: "neck" };
 
 /** Rounds won over every round of the file, [team that started CT, team that started T]; the facts cover only some rounds. */
-function finalScore(m: MatchFile): [number, number] {
+function finalScore(m: MatchFile, winSide: (SideCode | null)[]): [number, number] {
   const humanStart = SIDE[m.players.startSide[m.human] ?? -1];
   const out: [number, number] = [0, 0];
-  m.rounds.winSide.forEach((w, ri) => {
+  winSide.forEach((w, ri) => {
     const win = SIDE[w ?? -1];
-    const human = SIDE[m.rounds.side[ri]?.[m.human] ?? -1];
+    // the human's team's side, through a teammate or an opponent when he has none (results.ts teamSides)
+    const human = SIDE[teamSides(m, [ri])?.[0] ?? -1];
     if (!win || !human) return;
     const humanWon = win === human;
     // index 0 is the team that started CT
@@ -128,8 +130,39 @@ export function pluginToTables(m: MatchFile): MatchTables {
     const dur = m.rounds.durTicks[ri];
     return { fe, end: fe !== null && dur !== null ? fe + dur : null };
   };
-  // Shots exist only for the recording player; these rows become the shots table, in this order.
-  const shotRows = m.aim.shots.ri.flatMap((ri, i) => (covered(ri) ? [i] : []));
+  // winners the file leaves null (overtime, unknown result codes), rebuilt from the scores
+  const results = roundResults(m);
+  // Rows made in a bot's body (takeover) belong to the bot, as actor and as victim; bodies.ts says what
+  // happens to a row whose player is in no known body (null below). A grenade's rows ask for its
+  // thrower's body when it was thrown: grenades.throw links a detonation to its throw, damage.nade and
+  // blinds.flash link a hit or a blind to the detonation. Against the game's round stats on 41 recorded
+  // files, grenade damage credited by the throw tick agrees on 4701 of 4718 player-rounds and by the
+  // hit tick on 4698 (pnpm takeover-check).
+  const bodyAt = bodyLookup(m);
+  /** `g` when it names a grenades row of round ri thrown by pi, else null: a bad link counts as none. */
+  const grenadeOf = (g: number | null | undefined, ri: number, pi: number | null) =>
+    g !== null && g !== undefined && Number.isInteger(g) && g >= 0 && g < m.grenades.ri.length && m.grenades.ri[g] === ri && m.grenades.thrower[g] === pi ? g : null;
+  /** The throws row grenades row g came from, when its link is in range and names the same round and thrower. */
+  const throwOf = (g: number) => {
+    const j = m.grenades.throw?.[g];
+    const th = m.throws;
+    return th && j !== null && j !== undefined && Number.isInteger(j) && j >= 0 && j < th.ri.length && th.ri[j] === m.grenades.ri[g] && th.thrower[j] === m.grenades.thrower[g] ? j : null;
+  };
+  /**
+   * The body a grenade's thrower was in when it was thrown. Without a valid throw link, the detonation
+   * tick (or, with no valid grenade either, the row's own tick) stands in, and only a body the file has
+   * observed by then counts. Files before plugin 1.0.0 have no throw log and land here.
+   */
+  const throwerBody = (pi: number, ri: number, g: number | null, tick: number) => {
+    const j = g === null ? null : throwOf(g);
+    return j !== null ? bodyAt(pi, ri, m.throws!.tick[j]) : bodyAt(pi, ri, g === null ? tick : m.grenades.tick[g], { observed: true });
+  };
+  /** The victim of a row: its body, else the player itself (bodies.ts). */
+  const victimOf = (pi: number, ri: number, tick: number) => bodyAt(pi, ri, tick) ?? pi;
+  // Shots exist only for the recording player; these rows become the shots table, in this order. Shots
+  // he fired in a bot's body are left out: they are the bot's, and bots have no shot rows, so the bot's
+  // aim would rest on a takeover's bullets alone.
+  const shotRows = m.aim.shots.ri.flatMap((ri, i) => (covered(ri) && bodyAt(m.human, ri, m.aim.shots.tick[i]) === m.human ? [i] : []));
 
   const t: MatchTables = {
     match: emptyTable("match"), players: emptyTable("players"), rounds: emptyTable("rounds"), player_rounds: emptyTable("player_rounds"),
@@ -146,14 +179,14 @@ export function pluginToTables(m: MatchFile): MatchTables {
     convars: JSON.stringify({ mp_maxrounds: m.env.maxrounds ?? 24 }),
     extra: JSON.stringify({
       date: m.startUtc.slice(0, 10), started_at: m.startUtc, duration_s: (Date.parse(m.endUtc) - Date.parse(m.startUtc)) / 1000,
-      pov: human, rounds_played: m.rounds.winSide.length, status: m.status, final_score: finalScore(m),
+      pov: human, rounds_played: m.rounds.winSide.length, status: m.status, final_score: finalScore(m, results.winSide),
       // files before plugin 1.0.0 have no throw log; throws are rebuilt from detonations (facts.ts SourceInputs.throws)
       ...(m.throws ? {} : { throws: "rebuilt" }),
       on_screen: onScreenSource(m),
       // rounds the file holds only as totals, left out of the tables (MatchInfo.totalsOnly)
       totals_only_rounds: m.rounds.winSide.flatMap((_, ri) => (covered(ri) ? [] : [ri + 1])),
       // their per-player totals from the game's round stats (MatchFacts.totalsRounds)
-      totals_rounds: m.rounds.winSide.flatMap((w, ri) => {
+      totals_rounds: results.winSide.flatMap((w, ri) => {
         const basic = m.rounds.basic?.[ri];
         if (covered(ri) || !basic) return [];
         const players = key.flatMap((id, pi) => (basic[pi] ? [[id, ...basic[pi]!]] : []));
@@ -167,19 +200,25 @@ export function pluginToTables(m: MatchFile): MatchTables {
     if (!covered(ri)) continue;
     const { fe, end } = ticks(ri);
     if (fe === null || end === null) continue;
-    const win = SIDE[m.rounds.winSide[ri] ?? -1] ?? null;
-    const how = m.rounds.how[ri];
-    const ctIsHuman = sideOf(ri, m.human) === "CT";
-    const planter = m.rounds.planter[ri];
+    const win = SIDE[results.winSide[ri] ?? -1] ?? null;
+    const how = results.how[ri];
+    // the human's team's side, through a teammate or an opponent when he has none that round; with
+    // no side at all, the team names stay null and derive reads the CT team from the CT players
+    const usSide = SIDE[teamSides(m, [ri])?.[0] ?? -1] ?? null;
+    const plantTick = m.rounds.plantTick[ri];
+    const planterPi = m.rounds.planter[ri];
+    const defuserPi = m.rounds.defuser[ri];
+    const planter = planterPi === null || plantTick === null ? planterPi : bodyAt(planterPi, ri, plantTick);
+    const defuser = defuserPi === null ? null : bodyAt(defuserPi, ri, end);
     add(t.rounds, "rounds", {
       round: ri + 1, start_tick: fe, freeze_end_tick: fe, end_tick: end, winner_side: win,
-      reason: win && how ? REASON[how](win) : null, ct_team: ctIsHuman ? humanTeam : "Opponents", t_team: ctIsHuman ? "Opponents" : humanTeam,
+      reason: win && how ? REASON[how](win) : null, ct_team: usSide === null ? null : usSide === "CT" ? humanTeam : "Opponents", t_team: usSide === null ? null : usSide === "T" ? humanTeam : "Opponents",
       plant_tick: m.rounds.plantTick[ri], plant_site: m.rounds.bombSite[ri], planter_steamid: planter === null ? null : key[planter],
-      defuse_tick: how === "defuse" ? end : null, defuser_steamid: m.rounds.defuser[ri] === null ? null : key[m.rounds.defuser[ri]!],
+      defuse_tick: how === "defuse" ? end : null, defuser_steamid: defuser === null ? null : key[defuser],
       explode_tick: how === "bomb" ? end : null,
     });
     if (m.rounds.plantTick[ri] !== null) add(t.bomb, "bomb", { tick: m.rounds.plantTick[ri], round: ri + 1, event: "planted", steamid: planter === null ? null : key[planter], site: m.rounds.bombSite[ri] });
-    if (how === "defuse") add(t.bomb, "bomb", { tick: end, round: ri + 1, event: "defused", steamid: m.rounds.defuser[ri] === null ? null : key[m.rounds.defuser[ri]!] });
+    if (how === "defuse") add(t.bomb, "bomb", { tick: end, round: ri + 1, event: "defused", steamid: defuser === null ? null : key[defuser] });
     if (how === "bomb") add(t.bomb, "bomb", { tick: end, round: ri + 1, event: "exploded" });
     key.forEach((id, pi) => {
       const side = sideOf(ri, pi);
@@ -196,10 +235,33 @@ export function pluginToTables(m: MatchFile): MatchTables {
   for (let i = 0; i < k.ri.length; i++) {
     const ri = k.ri[i];
     if (!covered(ri) || k.flags[i] & FLAG.freeze) continue;
-    // A kill or death in a bot's body (takeover) belongs to the bot, as in CS Demo Manager.
-    const killer = k.kBody?.[i] ?? k.killer[i];
-    const victim = k.vBody?.[i] ?? k.victim[i];
-    // CS2 names one assister: the damage assister when there is one, else the flash assister.
+    // A kill or death in a bot's body (takeover) belongs to the bot, as in CS Demo Manager. kBody and
+    // vBody record the body at the event and override the timeline; null in them means the player's
+    // own body, and a kill whose killer the timeline puts in no body keeps its row with no attacker.
+    // Where the optional column is absent or short, the timeline decides. A grenade or fire kill linked
+    // to its throw goes to the body that threw it, as its damage does: kBody is the killer's body at the
+    // kill, null when he has no pawn then (a grenade thrown before his death), which is not his own
+    // body. Unlinked, a kBody naming a bot stands, since nothing says when the grenade was thrown: on 41
+    // recorded files the game's round stats credit the one such kill (a molotov) to that bot. Unlinked
+    // with kBody null (his own pawn, or none), the timeline at the kill decides: his own body there
+    // credits him, and a bot or no body leaves no attacker, since only a body the file has observed by
+    // the kill counts (throwerBody).
+    const tick = k.tick[i];
+    const named = k.killer[i];
+    const kb = bodyEntry(k.kBody, i);
+    const vb = bodyEntry(k.vBody, i);
+    const knade = k.nade?.[i] ?? null;
+    const grenade = knade !== null || GRENADE_WEAPONS.has(weapon(k.weapon[i]));
+    const g = grenade ? grenadeOf(knade, ri, named) : null;
+    const linked = g !== null && throwOf(g) !== null;
+    const killer = named === null ? null
+      : grenade ? (linked || typeof kb !== "number" ? throwerBody(named, ri, g, tick) : kb)
+      : kb === undefined ? bodyAt(named, ri, tick) : kb ?? (bodyAt(named, ri, tick) === null ? null : named);
+    const victim = vb === undefined ? victimOf(k.victim[i], ri, tick) : vb ?? k.victim[i];
+    // CS2 names one assister: the damage assister when there is one, else the flash assister. It stays
+    // the controller the event names, the one exception to body credit: on 41 recorded files the game's
+    // round stats agree with that on 4700 of 4718 player-rounds, against 4652 for the assister's body at
+    // the kill and 4678 for its body at its last hit or flash on the victim (pnpm takeover-check).
     const assister = k.assister[i] ?? k.flashAssister[i];
     const kp = k.kpos[i];
     const vp = k.vpos[i];
@@ -207,7 +269,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
     const vs = sideOf(ri, victim);
     const suicide = (k.flags[i] & FLAG.suicide) !== 0 || killer === victim;
     add(t.kills, "kills", {
-      tick: k.tick[i], round: ri + 1, attacker_steamid: killer === null ? null : key[killer], victim_steamid: key[victim],
+      tick, round: ri + 1, attacker_steamid: killer === null ? null : key[killer], victim_steamid: key[victim],
       assister_steamid: assister === null ? null : key[assister], assistedflash: k.assister[i] === null && k.flashAssister[i] !== null,
       weapon: weapon(k.weapon[i]), headshot: (k.flags[i] & FLAG.headshot) !== 0, penetrated: k.flags[i] & FLAG.wallbang ? 1 : 0,
       thrusmoke: (k.flags[i] & FLAG.smoke) !== 0, attackerblind: (k.flags[i] & FLAG.blind) !== 0, noscope: (k.flags[i] & FLAG.noscope) !== 0,
@@ -223,14 +285,19 @@ export function pluginToTables(m: MatchFile): MatchTables {
   for (let i = 0; i < d.ri.length; i++) {
     const ri = d.ri[i];
     if (!covered(ri)) continue;
-    const a = d.attacker[i];
-    const v = d.victim[i];
+    const nade = d.nade?.[i] ?? null;
+    const by = d.attacker[i];
+    // grenade or fire damage with no link to its grenade still asks for the body that threw it
+    const thrown = nade !== null || GRENADE_WEAPONS.has(weapon(d.weapon[i]));
+    const a = by === null ? null : thrown ? throwerBody(by, ri, grenadeOf(nade, ri, by), d.tick[i]) : bodyAt(by, ri, d.tick[i]);
+    if (a === null && by !== null) continue;
+    const v = victimOf(d.victim[i], ri, d.tick[i]);
     add(t.damages, "damages", {
       tick: d.tick[i], round: ri + 1, attacker_steamid: a === null ? null : key[a], victim_steamid: key[v], weapon: weapon(d.weapon[i]),
       // the plugin stores each hit's damage already capped at the victim's health
       dmg_health: d.dmg[i], dmg_health_capped: d.dmg[i], dmg_armor: d.dmgArmor[i], hitgroup: d.hitgroup[i] === null ? null : HITGROUP[d.hitgroup[i]!] ?? "generic",
       a_side: sideOf(ri, a), v_side: sideOf(ri, v), is_team_damage: a !== null && a !== v && sideOf(ri, a) === sideOf(ri, v),
-      is_self: a === v, grenade_entity_id: d.nade?.[i] ?? null,
+      is_self: a === v, grenade_entity_id: nade,
     });
   }
 
@@ -238,11 +305,15 @@ export function pluginToTables(m: MatchFile): MatchTables {
   for (let i = 0; i < b.ri.length; i++) {
     const ri = b.ri[i];
     if (!covered(ri)) continue;
-    const a = b.attacker[i];
-    const v = b.victim[i];
+    const flash = b.flash?.[i] ?? null;
+    const by = b.attacker[i];
+    // every blind comes from a flash, linked or not
+    const a = by === null ? null : throwerBody(by, ri, grenadeOf(flash, ri, by), b.tick[i]);
+    if (a === null && by !== null) continue;
+    const v = victimOf(b.victim[i], ri, b.tick[i]);
     add(t.blinds, "blinds", {
       tick: b.tick[i], round: ri + 1, attacker_steamid: a === null ? null : key[a], victim_steamid: key[v], duration: b.ms[i] / 1000,
-      flash_entity_id: b.flash?.[i] ?? null, is_self: a === v, is_team_flash: a !== null && a !== v && sideOf(ri, a) === sideOf(ri, v), ambiguous: false,
+      flash_entity_id: flash, is_self: a === v, is_team_flash: a !== null && a !== v && sideOf(ri, a) === sideOf(ri, v), ambiguous: false,
     });
   }
 
@@ -250,7 +321,10 @@ export function pluginToTables(m: MatchFile): MatchTables {
   for (let i = 0; i < g.ri.length; i++) {
     const ri = g.ri[i];
     if (!covered(ri)) continue;
-    const thrower = g.thrower[i] === null ? null : key[g.thrower[i]!];
+    // kept when the thrower is in no known body, with no thrower: the utility was there either way
+    const by = g.thrower[i];
+    const body = by === null ? null : throwerBody(by, ri, i, g.tick[i]);
+    const thrower = body === null ? null : key[body];
     const p = g.pos[i];
     add(t.grenade_events!, "grenade_events", { tick: g.tick[i], round: ri + 1, event: DETONATE[g.type[i]], entity_id: i, steamid: thrower, x: p?.[0] ?? null, y: p?.[1] ?? null, z: p?.[2] ?? null });
     if (p && (g.type[i] === "smoke" || g.type[i] === "molotov")) {
@@ -263,7 +337,10 @@ export function pluginToTables(m: MatchFile): MatchTables {
     const ri = th.ri[i];
     if (!covered(ri)) continue;
     const p = th.pos[i];
-    const thrower = th.thrower[i];
+    const by = th.thrower[i];
+    // a throw rebuilt from a detonation has only the detonation tick, so only an observed body counts
+    const thrower = by === null ? null : bodyAt(by, ri, th.tick[i], { observed: !m.throws });
+    if (thrower === null && by !== null) continue;
     add(t.grenade_throws!, "grenade_throws", {
       tick: th.tick[i], round: ri + 1, steamid: thrower === null ? null : key[thrower], weapon: THROW_CLASS[th.type[i]],
       side: sideOf(ri, thrower), x: p?.[0] ?? null, y: p?.[1] ?? null, z: p?.[2] ?? null,
@@ -285,12 +362,21 @@ export function pluginToTables(m: MatchFile): MatchTables {
     });
   }
 
+  // A player's row in another's body goes to that body only when the body has no row of its own within
+  // one bot sample (a second, plugin BotPosDue): bots keep their own rows while taken over, so it would
+  // otherwise repeat the body's row under the wrong player. In no known body, it is left out.
   const p = m.pos;
+  const posTicks = new Map<string, number[]>();
+  for (let i = 0; i < p.ri.length; i++) posTicks.set(`${p.ri[i]}:${p.pi[i]}`, [...(posTicks.get(`${p.ri[i]}:${p.pi[i]}`) ?? []), p.tick[i]]);
+  const sample = m.env.tickrate || 64;
   for (let i = 0; i < p.ri.length; i++) {
     const ri = p.ri[i];
     if (!covered(ri)) continue;
+    const body = bodyAt(p.pi[i], ri, p.tick[i]);
+    if (body === null) continue;
+    if (body !== p.pi[i] && (posTicks.get(`${ri}:${body}`) ?? []).some((x) => Math.abs(x - p.tick[i]) < sample)) continue;
     add(t.positions!, "positions", {
-      tick: p.tick[i], round: ri + 1, steamid: key[p.pi[i]], side: sideOf(ri, p.pi[i]), x: p.x[i], y: p.y[i], z: p.z[i],
+      tick: p.tick[i], round: ri + 1, steamid: key[body], side: sideOf(ri, body), x: p.x[i], y: p.y[i], z: p.z[i],
       is_alive: p.alive[i], place: p.place[i] === null ? null : m.places[p.place[i]!] ?? null,
     });
   }

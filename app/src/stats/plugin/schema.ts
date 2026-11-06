@@ -4,6 +4,14 @@
 export type Side = 2 | 3; // 2 = T, 3 = CT
 
 export type RoundHow = "elim" | "defuse" | "time" | "bomb";
+/**
+ * Weapons whose damage or kill comes from a thrown grenade or its fire, so the body that dealt it is
+ * the one that threw it, which may differ from the body (or no body) the thrower is in at the hit.
+ */
+export const GRENADE_WEAPONS: ReadonlySet<string> = new Set(["hegrenade", "inferno", "molotov", "incgrenade", "smokegrenade", "flashbang", "decoy"]);
+
+/** kills.flags bits (SCHEMA.md); suicide and freeze are plugin 1.0.0 additions */
+export const KILL_FLAG = { headshot: 1, wallbang: 2, smoke: 4, blind: 8, noscope: 16, air: 32, suicide: 64, freeze: 128 } as const;
 export type GrenadeType = "he" | "flash" | "smoke" | "molotov" | "decoy";
 export type Vec3 = [number, number, number];
 /** [ctAlive, tAlive, ctHp, tHp, ctEquip, tEquip, planted(0/1), ticksSincePlant|null] */
@@ -61,7 +69,8 @@ export interface Rounds {
   planter: (number | null)[];
   defuser: (number | null)[];
   ctSetup: ([number, number, number, number, number] | null)[];
-  score: [number, number][];
+  /** [T, CT] score at the start of the round; the writer emits null for a round, or for a part, it could not read */
+  score: ([number | null, number | null] | null)[];
   side: (Side | null)[][];
   equip: (number | null)[][];
   money: (number | null)[][];
@@ -110,7 +119,7 @@ export interface Kills {
   nade?: (number | null)[];
   /** grenades the victim still held, [he, flash, smoke, molotov, incgrenade, decoy] */
   vUtil?: (UtilCounts | null)[];
-  /** pi of the bot whose body the killer / victim was controlling (takeover); credit stays with killer / victim */
+  /** pi of the bot whose body the killer / victim was controlling (takeover); the kill or death is the bot's (bodies.ts) */
   kBody?: (number | null)[];
   vBody?: (number | null)[];
 }
@@ -166,7 +175,25 @@ export interface Recon {
   };
   mismatch?: { ri: number[]; pi: number[]; field: string[]; ours: number[]; game: number[]; hits: (number | null)[] };
   partial?: number[];
+  /**
+   * Rounds whose result code the plugin did not know, so winSide and how are null. From plugin 1.3.0,
+   * rounds whose winSide or how is still null after both the code and the round_end event.
+   */
   unknownResult?: number[];
+  /** rows lost to full buffers, by table name (plugin 1.3.0 adds "takeovers") */
+  dropped?: Record<string, number>;
+}
+
+/**
+ * Optional (plugin 1.3.0): when a player drives another's body. From `tick` on, controller `pi` drives
+ * the pawn of bot `body`; null means it is back in its own pawn or in none. Every round starts with
+ * every player in their own body. Rows a player makes in a bot's body belong to the bot (bodies.ts).
+ */
+export interface Takeovers {
+  ri: number[];
+  tick: number[];
+  pi: number[];
+  body: (number | null)[];
 }
 
 export interface Pos {
@@ -249,6 +276,7 @@ export interface MatchFile {
   /** los (plugin 1.1.0): an enemy entering (vis 1) or leaving (vis 0) the human's line of sight */
   aim: { engagements: Engagements; shots: Shots; hitMask?: HitMask; los?: { ri: number[]; tick: number[]; enemy: number[]; vis: (0 | 1)[] } };
   throws?: Throws;
+  takeovers?: Takeovers;
   recon?: Recon;
   /** players who disconnected during a recorded round */
   leaves?: { ri: number[]; tick: number[]; pi: number[]; alive: (0 | 1 | boolean)[] };
@@ -282,6 +310,7 @@ const TABLE_COLUMNS = {
   ],
   throws: ["ri", "tick", "thrower", "type", "pos"],
   hitMask: ["ri", "tick", "victim", "m0", "m1", "spotted"],
+  takeovers: ["ri", "tick", "pi", "body"],
 } as const;
 
 function checkTable(where: string, table: unknown, name: keyof typeof TABLE_COLUMNS): number {
@@ -316,6 +345,7 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
   const nPlayers = checkTable(where, m.players, "players");
   const nRounds = checkTable(where, m.rounds, "rounds");
   for (const t of ["kills", "damage", "blinds", "grenades", "pos"] as const) checkTable(where, m[t], t);
+  checkBodies(where, m.kills as Kills, nPlayers);
   const aim = m.aim as Record<string, unknown> | undefined;
   if (typeof aim !== "object" || aim === null) throw new SchemaError(where, `field "aim" must be an object`);
   checkTable(where, aim.engagements, "engagements");
@@ -338,10 +368,78 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
     }
   }
   if (m.throws !== undefined) checkTable(where, m.throws, "throws");
+  if (m.takeovers !== undefined) checkTakeovers(where, m.takeovers, m as unknown as MatchFile);
   decodePositions(m.pos as Pos);
   const ffr = m.firstFullRound as number;
   if (ffr < 0 || ffr > nRounds) throw new SchemaError(where, `firstFullRound ${ffr} is outside 0..${nRounds}`);
   return raw as MatchFile;
+}
+
+/**
+ * Takeover rows must name a round, a tick inside it, the human and a bot's body (or null), so a bad
+ * row fails here rather than crediting the wrong player (SCHEMA.md: only the human takes over a bot).
+ *
+ * A takeover starts after a death in the live round, so no row comes before the round's freeze end.
+ * Its end row is stamped at the body's death tick + 1, and the plugin keeps recording deaths after
+ * round_end until the next round begins (plugin/Core/Recorder.cs Kill checks RoundActive, which only
+ * BeginRound clears): the bomb's blast kills 1 to 22 ticks after the end. So a row may come as late
+ * as the next round's freeze end. In the last round, which has none, the bound is the latest of the
+ * end tick plus the plugin's finalize delay (round_end + one second, run from a 0.25 s timer:
+ * plugin/Game/Events.cs OnRoundEnd, BotMatchStatsPlugin Housekeeping) and the tick after the round's
+ * last recorded death. A round with no recorded freeze end has nothing to check against, and one with
+ * no recorded length checks only the lower bound.
+ */
+function checkTakeovers(where: string, table: unknown, m: MatchFile): void {
+  const n = checkTable(where, table, "takeovers");
+  const t = table as Takeovers;
+  const { players, rounds, human } = m;
+  const nPlayers = players.key.length;
+  const nRounds = rounds.winSide.length;
+  const rate = m.env.tickrate || 64;
+  const index = (x: unknown, size: number) => Number.isInteger(x) && (x as number) >= 0 && (x as number) < size;
+  const lastDeath = new Map<number, number>();
+  m.kills.ri.forEach((ri, i) => lastDeath.set(ri, Math.max(lastDeath.get(ri) ?? -Infinity, m.kills.tick[i])));
+  /** the latest tick a takeovers row of round ri may carry, or null when the file does not bound it */
+  const latest = (ri: number): number | null => {
+    const next = ri + 1 < nRounds ? rounds.freezeTick[ri + 1] : null;
+    if (next !== null) return next;
+    const fe = rounds.freezeTick[ri];
+    const dur = rounds.durTicks[ri];
+    if (fe === null || dur === null) return null;
+    return Math.max(fe + dur + rate + Math.ceil(rate / 4), (lastDeath.get(ri) ?? -Infinity) + 1);
+  };
+  for (let i = 0; i < n; i++) {
+    const ri = t.ri[i];
+    if (!index(ri, nRounds)) throw new SchemaError(where, `takeovers.ri[${i}] is ${JSON.stringify(ri)}, expected a round index 0..${nRounds - 1}`);
+    const tick = t.tick[i];
+    if (!Number.isInteger(tick)) throw new SchemaError(where, `takeovers.tick[${i}] is ${JSON.stringify(tick)}, expected an integer tick`);
+    const fe = rounds.freezeTick[ri];
+    if (fe !== null && tick < fe) throw new SchemaError(where, `takeovers.tick[${i}] is ${tick}, before round ${ri}'s freeze end ${fe}`);
+    const last = fe === null ? null : latest(ri);
+    if (last !== null && tick > last) throw new SchemaError(where, `takeovers.tick[${i}] is ${tick}, after round ${ri}'s last tick ${last}`);
+    if (t.pi[i] !== human) throw new SchemaError(where, `takeovers.pi[${i}] is ${JSON.stringify(t.pi[i])}, expected the human's index ${human}`);
+    const body = t.body[i];
+    if (body !== null && (!index(body, nPlayers) || !players.isBot[body])) {
+      throw new SchemaError(where, `takeovers.body[${i}] is ${JSON.stringify(body)}, expected null or a bot's index`);
+    }
+  }
+}
+
+/**
+ * kills.kBody and kills.vBody may be absent or shorter than the kills table (bodies.ts bodyEntry), but
+ * an entry present must be null or a player index, since the adapter credits that player.
+ */
+function checkBodies(where: string, k: Kills, nPlayers: number): void {
+  for (const col of ["kBody", "vBody"] as const) {
+    const c = k[col] as unknown;
+    if (c === undefined) continue;
+    if (!Array.isArray(c)) throw new SchemaError(where, `column "kills.${col}" is not an array`);
+    c.forEach((x, i) => {
+      if (x !== null && !(Number.isInteger(x) && x >= 0 && x < nPlayers)) {
+        throw new SchemaError(where, `kills.${col}[${i}] is ${JSON.stringify(x)}, expected null or a player index 0..${nPlayers - 1}`);
+      }
+    });
+  }
 }
 
 /**
