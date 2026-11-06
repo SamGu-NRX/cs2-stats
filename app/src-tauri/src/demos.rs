@@ -17,11 +17,13 @@
 //! is under the floor. Pinned demos are never deleted by a sweep.
 //!
 //! Every write to the store happens under the Bot Mode operation lock ([`OpLock`]); taking a demo
-//! out of the game folder also needs CS2 closed. The store's paths are checked like the Valve
-//! folder's: a junction in `replays\` or in the store is refused.
+//! out of the game folder also needs CS2 closed. Every file in the store, and each demo taken from
+//! `replays\`, is opened, checked and changed through one handle ([`handle`]): a junction, link or
+//! hard link there is refused and left alone.
 
-use crate::botmode::hash;
-use crate::botmode::paths::{is_reparse, Layout};
+mod handle;
+
+use crate::botmode::paths::Layout;
 use crate::botmode::process::{ensure_cs2_closed, OpLock, Phase, ProcessProbe};
 use crate::botmode::settings::AppSettings;
 use serde::{Deserialize, Serialize};
@@ -92,13 +94,18 @@ pub struct Keep {
     pub reason: String,
 }
 
-/// The store folder and its files. Only [`Store::of`] and [`Store::in_base`] make one, and both
-/// check it first, so every read and write goes through a store that is not a junction or link.
+/// The store folder and its files. Every file in it is opened, checked and changed through
+/// [`handle::Dir`]: one handle per file, never a path that could lead elsewhere.
 pub struct Store {
+    /// `%APPDATA%\BotMatchStats\demos`, as the card shows it.
     pub root: PathBuf,
-    /// The folder holding `demos\`: `%APPDATA%\BotMatchStats`.
-    base: PathBuf,
+    /// Its canonical path, read once for this operation: on the first use, or when [`Store::ensure`]
+    /// creates the folder.
+    dir: std::cell::OnceCell<handle::Dir>,
 }
+
+const LEDGER: &str = "ledger.jsonl";
+const KEEPS: &str = "keeps.json";
 
 impl Store {
     /// `demos\` beside the Bot Mode folder: `%APPDATA%\BotMatchStats\demos`.
@@ -107,76 +114,74 @@ impl Store {
         Store::in_base(parent)
     }
 
-    /// `demos\` in `base` (`%APPDATA%\BotMatchStats`), refused when either is a junction or link.
+    /// `demos\` in `base` (`%APPDATA%\BotMatchStats`). Refused at once when `demos\` is a junction or
+    /// link; the folders above it may be (a relocated AppData).
     pub fn in_base(base: &Path) -> Result<Store, String> {
-        let s = Store { root: base.join("demos"), base: base.to_path_buf() };
-        s.check()?;
+        let s = Store { root: base.join("demos"), dir: std::cell::OnceCell::new() };
+        s.dir()?;
         Ok(s)
     }
 
-    /// Refuses a store reached through a junction or link: `demos\` itself or the folder above it,
-    /// up to `%APPDATA%\BotMatchStats`. A delete through one would remove files outside the store.
-    /// A folder not there yet passes; [`Store::ensure`] creates it and checks again.
-    fn check(&self) -> Result<(), String> {
-        for p in [&self.root, &self.base] {
-            match fs::symlink_metadata(p) {
-                Ok(m) if is_reparse(&m) => return Err(format!("{} is a junction or link; demos are not kept through one", p.display())),
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(format!("{}: {e}", p.display())),
+    /// The folder, None while it does not exist.
+    fn dir(&self) -> Result<Option<&handle::Dir>, String> {
+        if let Some(d) = self.dir.get() {
+            return Ok(Some(d));
+        }
+        match fs::symlink_metadata(&self.root) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            _ => {
+                let d = handle::Dir::open(&self.root)?;
+                Ok(Some(self.dir.get_or_init(|| d)))
             }
         }
-        Ok(())
-    }
-    pub fn dem(&self, id: &str) -> PathBuf {
-        self.root.join(format!("{id}.dem"))
-    }
-    fn meta_path(&self, id: &str) -> PathBuf {
-        self.root.join(format!("{id}.meta.json"))
-    }
-    fn ledger(&self) -> PathBuf {
-        self.root.join("ledger.jsonl")
-    }
-    fn keeps_file(&self) -> PathBuf {
-        self.root.join("keeps.json")
     }
 
-    /// The store folder, created if missing; refused when it is a junction or link.
-    fn ensure(&self) -> Result<(), String> {
-        self.check()?;
+    /// The folder, created if missing.
+    fn ensure(&self) -> Result<&handle::Dir, String> {
+        if let Some(d) = self.dir()? {
+            return Ok(d);
+        }
         fs::create_dir_all(&self.root).map_err(|e| format!("{}: {e}", self.root.display()))?;
-        self.check()
+        self.dir()?.ok_or_else(|| format!("{} could not be created", self.root.display()))
+    }
+
+    /// Where the demo would be, for display and tests. Nothing opens a store file by this path.
+    pub fn dem(&self, id: &str) -> PathBuf {
+        self.root.join(dem_name(id))
+    }
+
+    /// Whether anything is at the demo's name; a link counts, and is refused when opened.
+    fn has_dem(&self, id: &str) -> bool {
+        self.dir().ok().flatten().is_some_and(|d| d.exists(&dem_name(id)))
+    }
+
+    /// The demo's canonical path, for the importer to read, once its file passes the checks.
+    fn dem_checked(&self, id: &str) -> Result<PathBuf, String> {
+        let d = self.dir()?.ok_or("the demos folder is gone")?;
+        d.open_file(&dem_name(id), handle::Mode::Read)?.ok_or_else(|| format!("{} is gone", dem_name(id)))?;
+        Ok(d.path().join(dem_name(id)))
     }
 
     pub fn read_meta(&self, id: &str) -> Result<Meta, String> {
         if !is_id(id) {
             return Err(format!("{id}: not a demo id"));
         }
-        let p = self.meta_path(id);
-        if fs::symlink_metadata(&p).is_ok_and(|m| is_reparse(&m)) {
-            return Err(format!("{} is a link; it is not read", p.display()));
-        }
-        let text = fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", p.display()))
+        let name = meta_name(id);
+        let bytes = self.dir()?.map(|d| d.read(&name)).transpose()?.flatten().ok_or_else(|| format!("{name}: not in the demos folder"))?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("{name}: {e}"))
     }
 
     fn write_meta(&self, m: &Meta) -> Result<(), String> {
         let text = serde_json::to_string_pretty(m).map_err(|e| e.to_string())?;
-        crate::botmode::changes::write_atomic(&self.meta_path(&m.id), text.as_bytes())
+        self.ensure()?.write_atomic(&meta_name(&m.id), text.as_bytes())
     }
 
-    /// Every sidecar in the store, oldest first. A sidecar that cannot be read is an error, so a
-    /// sweep never runs on a partial list.
+    /// Every sidecar in the store, oldest first. A sidecar that cannot be read, or fails a check, is
+    /// an error, so a sweep never runs on a partial list.
     pub fn metas(&self) -> Result<Vec<Meta>, String> {
+        let Some(d) = self.dir()? else { return Ok(Vec::new()) };
         let mut out = Vec::new();
-        let items = match fs::read_dir(&self.root) {
-            Ok(i) => i,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-            Err(e) => return Err(format!("{}: {e}", self.root.display())),
-        };
-        for item in items {
-            let item = item.map_err(|e| format!("{}: {e}", self.root.display()))?;
-            let name = item.file_name().to_string_lossy().into_owned();
+        for name in d.names()? {
             if let Some(id) = name.strip_suffix(".meta.json").filter(|id| is_id(id)) {
                 out.push(self.read_meta(id)?);
             }
@@ -185,16 +190,16 @@ impl Store {
         Ok(out)
     }
 
-    /// Appends one event to the ledger and flushes it to disk. A record cut off by a crash or a
-    /// power loss is an incomplete last line; it is dropped first and the drop is recorded, so the
-    /// next record does not run on from it into one line that reads as neither.
+    /// Appends one event to the ledger through one checked handle, and flushes it to disk. A record
+    /// cut off by a crash or a power loss is an incomplete last line; it is dropped first and the drop
+    /// is recorded, so the next record does not run on from it into one line that reads as neither.
+    /// A ledger that fails a check (a link, a hard link) is not written.
     fn log(&self, id: &str, event: &str, reason: Option<&str>) -> Result<(), String> {
         use std::io::{Read, Seek, SeekFrom};
-        let p = self.ledger();
-        let fail = |e: std::io::Error| format!("{}: {e}", p.display());
-        let mut f = fs::OpenOptions::new().create(true).read(true).write(true).truncate(false).open(&p).map_err(fail)?;
+        let (mut f, info) = self.ensure()?.open_file(LEDGER, handle::Mode::Write)?.ok_or("the ledger could not be created")?;
+        let fail = |e: std::io::Error| format!("{LEDGER}: {e}");
         let mut lines = Vec::new();
-        if f.metadata().map_err(fail)?.len() > 0 {
+        if info.size > 0 {
             let mut last = [0u8];
             f.seek(SeekFrom::End(-1)).and_then(|_| f.read_exact(&mut last)).map_err(fail)?;
             if last[0] != b'\n' {
@@ -212,18 +217,29 @@ impl Store {
         f.write_all(text.as_bytes()).and_then(|_| f.sync_all()).map_err(fail)
     }
 
+    /// Records a file the store would not touch, and why.
+    fn refused(&self, name: &str, why: &str) {
+        let _ = self.log(name, "refused", Some(why));
+    }
+
     pub fn keeps(&self) -> Result<Vec<Keep>, String> {
-        match fs::read_to_string(self.keeps_file()) {
-            Ok(t) => serde_json::from_str(&t).map_err(|e| format!("{}: {e}", self.keeps_file().display())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(format!("{}: {e}", self.keeps_file().display())),
+        match self.dir()?.map(|d| d.read(KEEPS)).transpose()?.flatten() {
+            Some(t) => serde_json::from_slice(&t).map_err(|e| format!("{KEEPS}: {e}")),
+            None => Ok(Vec::new()),
         }
     }
 
     fn set_keeps(&self, keeps: &[Keep]) -> Result<(), String> {
         let text = serde_json::to_string(keeps).map_err(|e| e.to_string())?;
-        crate::botmode::changes::write_atomic(&self.keeps_file(), text.as_bytes())
+        self.ensure()?.write_atomic(KEEPS, text.as_bytes())
     }
+}
+
+fn dem_name(id: &str) -> String {
+    format!("{id}.dem")
+}
+fn meta_name(id: &str) -> String {
+    format!("{id}.meta.json")
 }
 
 /// `<yyyymmddThhmmZ>_<map>_<8 hex>`, as [`demo_id`] makes and local_import.py's ID_RE reads.
@@ -312,91 +328,82 @@ pub struct Taken {
 /// the operation lock held. A demo already in the store (the same content under the same id) is
 /// removed from `replays\`. A sidecar left without its demo stays for [`sweep`] to mark missing.
 ///
-/// CS2 can start while a take runs, and a demo can still be growing although its last write is
-/// older than [`SETTLE`]. So CS2 is checked again right before each move or removal, and a demo is
-/// taken only when its size and modified time are the same before and after it is hashed; one that
-/// changed waits for a later take.
+/// Each demo is opened once, shared with no one, and everything happens through that handle: the
+/// checks, the hash, the move and the removal. CS2 writing it, or anything else holding it open,
+/// makes the open fail, and the demo waits for a later take. CS2 is checked again right before
+/// each move or removal. On one volume the handle is renamed into the store. Across volumes (a
+/// Steam library on another drive) the demo is copied into a temporary file in the store, flushed,
+/// checked against its hash and renamed into place; the original is deleted through its handle
+/// only if CS2 is still closed. If CS2 has started, the original stays, the copy stands, and a later
+/// take, finding the copy by its hash, removes the original.
 pub fn take(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, now: SystemTime) -> Result<Taken, String> {
-    take_with(store, layout, probe, lock, now, &|p: &Path| hash::file(p))
+    take_with(store, layout, probe, lock, now, &|dir, f, name| dir.rename_into(f, name))
 }
 
-/// [`take`] with the hash as a parameter, so a test can change a demo while it is hashed.
-fn take_with(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &OpLock, now: SystemTime, hash_file: &dyn Fn(&Path) -> Result<String, String>) -> Result<Taken, String> {
+/// [`take`] with the move into the store as a parameter, so a test can have it report another volume.
+fn take_with(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &OpLock, now: SystemTime, move_into: &dyn Fn(&handle::Dir, &fs::File, &str) -> std::io::Result<()>) -> Result<Taken, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let mut out = Taken::default();
     let replays = layout.csgo.join("replays");
-    let rm = match fs::symlink_metadata(&replays) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-        Err(e) => return Err(format!("{}: {e}", replays.display())),
+    let rdir = match handle::Dir::open(&replays) {
+        Ok(d) => d,
+        Err(_) if fs::symlink_metadata(&replays).is_err() => return Ok(out),
+        Err(e) => return Err(e),
     };
-    if is_reparse(&rm) || !rm.is_dir() {
-        return Err(format!("{} is a junction, link or file; demos are not taken from it", replays.display()));
-    }
-    store.ensure()?;
-    adopt_orphans(store)?;
+    let dir = store.ensure()?;
+    adopt_orphans(store, dir)?;
     let build = game_build(layout);
-    let mut names: Vec<String> = fs::read_dir(&replays)
-        .map_err(|e| format!("{}: {e}", replays.display()))?
-        .filter_map(|i| i.ok().map(|i| i.file_name().to_string_lossy().into_owned()))
-        .filter(|n| is_auto_demo(n))
-        .collect();
+    let mut names: Vec<String> = rdir.names()?.into_iter().filter(|n| is_auto_demo(n)).collect();
     names.sort();
     for name in names {
-        let src = replays.join(&name);
         // every message below names the demo by its place in the list, never by its name
         let which = format!("a recorded demo in {}", replays.display());
-        let m = match fs::symlink_metadata(&src) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if is_reparse(&m) {
-            out.refused.push(format!("{which} is a link; it was left where it is"));
-            continue;
-        }
-        if !m.is_file() {
-            continue;
-        }
-        let modified = m.modified().unwrap_or(now);
-        if now.duration_since(modified).unwrap_or_default() < SETTLE {
-            out.waiting += 1;
-            continue;
-        }
-        let sha = match hash_file(&src) {
-            Ok(s) => s,
-            Err(_) => {
-                out.refused.push(format!("{which} could not be read; it was left where it is"));
+        let mut f = match handle::open_exclusive(&rdir.path().join(&name)) {
+            Ok(f) => f,
+            Err(e) if e.raw_os_error() == Some(handle::SHARING_VIOLATION) => {
+                out.waiting += 1;
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                out.refused.push(format!("{which} could not be opened ({}); it was left where it is", e.kind()));
                 continue;
             }
         };
-        let after = fs::symlink_metadata(&src).ok();
-        if after.as_ref().map(|a| (a.len(), a.modified().ok())) != Some((m.len(), m.modified().ok())) {
+        let info = match rdir.check(&f) {
+            Ok(i) => i,
+            Err(why) => {
+                out.refused.push(format!("{which} {why}; it was left where it is"));
+                continue;
+            }
+        };
+        if now.duration_since(info.modified).unwrap_or_default() < SETTLE {
             out.waiting += 1;
             continue;
         }
-        ensure_cs2_closed(probe, Phase::Operation)?;
+        let Ok(sha) = handle::hash(&mut f) else {
+            out.refused.push(format!("{which} could not be read; it was left where it is"));
+            continue;
+        };
         let map = map_of_auto_name(&name).unwrap_or("unknown");
-        let created = m.created().unwrap_or(modified);
-        let id = demo_id(created, map, &sha);
-        let dst = store.dem(&id);
-        if dst.exists() {
+        let id = demo_id(info.created, map, &sha);
+        let dst = dem_name(&id);
+        if dir.exists(&dst) {
             if store.read_meta(&id).is_ok_and(|have| have.sha256 == sha) {
-                fs::remove_file(&src).map_err(|e| format!("{which}, already kept as {id}, could not be removed: {}", e.kind()))?;
+                ensure_cs2_closed(probe, Phase::Operation)?;
+                handle::delete(&f).map_err(|e| format!("{which}, already kept as {id}, could not be removed: {}", e.kind()))?;
             } else {
                 out.refused.push(format!("{which} has the id of a different demo, {id}; it was left where it is"));
             }
             continue;
         }
-        if let Err(e) = move_into(&src, &dst, &sha) {
-            out.refused.push(format!("{which} could not be moved into {} ({e}); it was left where it is", store.root.display()));
-            continue;
-        }
+        ensure_cs2_closed(probe, Phase::Operation)?;
         let meta = Meta {
             id: id.clone(),
-            sha256: sha,
-            dem_bytes: m.len(),
+            sha256: sha.clone(),
+            dem_bytes: info.size,
             map: map.to_string(),
-            created_utc: iso_utc(created),
+            created_utc: iso_utc(info.created),
             game_build: build.clone(),
             state: State::Taken,
             pinned: false,
@@ -405,60 +412,81 @@ fn take_with(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &O
             failed_versions: Vec::new(),
             kept: None,
         };
-        store.write_meta(&meta)?;
-        store.log(&id, "taken", None)?;
-        out.taken.push(id);
+        match move_into(dir, &f, &dst) {
+            Ok(()) => {
+                store.write_meta(&meta)?;
+                store.log(&id, "taken", None)?;
+                out.taken.push(id);
+            }
+            Err(e) if e.raw_os_error() == Some(handle::NOT_SAME_DEVICE) => {
+                if let Err(e) = copy_into(dir, &mut f, &id, &sha) {
+                    out.refused.push(format!("{which} could not be copied into {} ({e}); it was left where it is", store.root.display()));
+                    continue;
+                }
+                store.write_meta(&meta)?;
+                store.log(&id, "taken", Some("copied from another volume"))?;
+                out.taken.push(id.clone());
+                // the copy stands either way; the original goes only while CS2 is closed
+                ensure_cs2_closed(probe, Phase::Operation)?;
+                if let Err(e) = handle::delete(&f) {
+                    out.refused.push(format!("{which} was copied into the store as {id}, but the original could not be removed ({}); a later take removes it", e.kind()));
+                }
+            }
+            Err(e) => out.refused.push(format!("{which} could not be moved into {} ({}); it was left where it is", store.root.display(), e.kind())),
+        }
     }
     Ok(out)
 }
 
-/// A rename, which keeps the creation time and is instant on one volume. Across volumes (a Steam
-/// library on another drive) the demo is copied beside its target, checked against its hash, put
-/// in place, and only then removed from `replays\`. Errors say what failed, never the source name.
-fn move_into(src: &Path, dst: &Path, sha: &str) -> Result<(), String> {
-    if fs::rename(src, dst).is_ok() {
-        return Ok(());
+/// Copies the open demo `src` into the store as `<id>.dem`: a new temporary file, flushed, its hash
+/// checked against `sha`, then renamed into place. On any failure the temporary file is deleted.
+fn copy_into(dir: &handle::Dir, src: &mut fs::File, id: &str, sha: &str) -> Result<(), String> {
+    let part = format!("{id}.dem.part");
+    if dir.exists(&part) {
+        dir.delete(&part)?;
     }
-    let part = dst.with_extension("dem.part");
-    let copied = fs::copy(src, &part).map_err(|e| format!("copy: {}", e.kind())).and_then(|_| {
-        let got = hash::file(&part).map_err(|_| "the copy could not be read back".to_string())?;
-        if got == sha {
-            Ok(())
-        } else {
-            Err("the copy differs from the demo".to_string())
-        }
-    });
-    if let Err(e) = copied {
-        let _ = fs::remove_file(&part);
-        return Err(e);
+    let mut tmp = dir.create_new(&part)?;
+    let done = handle::copy(src, &mut tmp)
+        .map_err(|e| format!("copy: {}", e.kind()))
+        .and_then(|(got, _)| if got == sha { Ok(()) } else { Err("the copy differs from the demo".to_string()) })
+        .and_then(|_| dir.rename_into(&tmp, &dem_name(id)).map_err(|e| format!("{}: {}", dem_name(id), e.kind())));
+    if done.is_err() {
+        let _ = handle::delete(&tmp);
     }
-    fs::rename(&part, dst).map_err(|e| format!("{}: {e}", dst.display()))?;
-    fs::remove_file(src).map_err(|e| format!("the copy is kept, but the original could not be removed: {}", e.kind()))
+    done
 }
 
-/// A demo in the store with no sidecar (a take stopped between its move and its sidecar) gets one
-/// from its id and file; a leftover `.part` copy is deleted.
-fn adopt_orphans(store: &Store) -> Result<(), String> {
-    for item in fs::read_dir(&store.root).map_err(|e| format!("{}: {e}", store.root.display()))? {
-        let Ok(item) = item else { continue };
-        let name = item.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".dem.part") {
-            let _ = fs::remove_file(item.path());
+/// Tidies the store before a take. A demo with no sidecar (a take stopped between its move and its
+/// sidecar) gets one from its id and file, read through a checked handle. A leftover temporary file
+/// is deleted. A file that fails a check is left alone and recorded in the ledger.
+fn adopt_orphans(store: &Store, dir: &handle::Dir) -> Result<(), String> {
+    for name in dir.names()? {
+        if name.ends_with(".dem.part") || name.ends_with(".tmp") {
+            if let Err(why) = dir.delete(&name) {
+                store.refused(&name, &why);
+            }
             continue;
         }
         let Some(id) = name.strip_suffix(".dem").filter(|id| is_id(id)) else { continue };
-        if store.meta_path(id).exists() {
+        if dir.exists(&meta_name(id)) {
             continue;
         }
-        let m = fs::metadata(item.path()).map_err(|e| format!("{}: {e}", item.path().display()))?;
-        let created = m.created().or_else(|_| m.modified()).unwrap_or(UNIX_EPOCH);
-        let map = id[15..id.len() - 9].to_string();
+        let (mut f, info) = match dir.open_file(&name, handle::Mode::Read) {
+            Ok(Some(x)) => x,
+            Ok(None) => continue,
+            Err(why) => {
+                store.refused(&name, &why);
+                continue;
+            }
+        };
+        let sha = handle::hash(&mut f).map_err(|e| format!("{name}: {e}"))?;
+        drop(f);
         let meta = Meta {
             id: id.to_string(),
-            sha256: hash::file(&item.path())?,
-            dem_bytes: m.len(),
-            map,
-            created_utc: iso_utc(created),
+            sha256: sha,
+            dem_bytes: info.size,
+            map: id[15..id.len() - 9].to_string(),
+            created_utc: iso_utc(info.created),
             game_build: None,
             state: State::Taken,
             pinned: false,
@@ -565,16 +593,15 @@ pub fn plan_sweep(demos: &[Meta], keeps: &[Keep], policy: &Policy, free: u64, re
 /// what [`plan_sweep`] says and records why each remaining demo stays. `keeps`, when given,
 /// replaces the engine's list kept in the store (`keeps.json`); otherwise the last one is used.
 pub fn sweep(store: &Store, _lock: &OpLock, policy: &Policy, keeps: Option<&[Keep]>, reserve: u64, build: Option<&str>, extractor: Option<&str>) -> Result<Plan, String> {
-    if !store.root.exists() {
+    if store.dir()?.is_none() {
         return Ok(Plan::default());
     }
-    store.ensure()?;
     if let Some(k) = keeps {
         store.set_keeps(k)?;
     }
     let keeps = store.keeps()?;
     let mut metas = store.metas()?;
-    for m in metas.iter_mut().filter(|m| m.state != State::Missing && !store.dem(&m.id).exists()) {
+    for m in metas.iter_mut().filter(|m| m.state != State::Missing && !store.has_dem(&m.id)) {
         m.state = State::Missing;
         m.kept = None;
         store.write_meta(m)?;
@@ -598,15 +625,13 @@ pub fn sweep(store: &Store, _lock: &OpLock, policy: &Policy, keeps: Option<&[Kee
 }
 
 fn remove(store: &Store, id: &str, why: &str) -> Result<(), String> {
-    let dem = store.dem(id);
-    if let Ok(m) = fs::symlink_metadata(&dem) {
-        if is_reparse(&m) {
-            return Err(format!("{} is a link; it was not deleted", dem.display()));
+    let Some(dir) = store.dir()? else { return Ok(()) };
+    for name in [dem_name(id), meta_name(id)] {
+        if let Err(e) = dir.delete(&name) {
+            store.refused(&name, &e);
+            return Err(e);
         }
-        fs::remove_file(&dem).map_err(|e| format!("{}: {e}", dem.display()))?;
     }
-    fs::remove_file(store.meta_path(id)).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
-        .map_err(|e| format!("{}: {e}", store.meta_path(id).display()))?;
     store.log(id, "deleted", Some(why))
 }
 
@@ -654,7 +679,7 @@ pub fn to_extract(store: &Store, extractor: &str) -> Result<Vec<String>, String>
     Ok(store
         .metas()?
         .into_iter()
-        .filter(|m| store.dem(&m.id).exists())
+        .filter(|m| store.has_dem(&m.id))
         .filter(|m| match m.state {
             State::Taken => true,
             State::Failed => m.failed_versions.len() == 1 && m.failed_versions[0] != extractor,
@@ -712,21 +737,17 @@ pub fn gb(bytes: u64) -> String {
     if tenths % 10 == 0 { format!("{}", tenths / 10) } else { format!("{}.{}", tenths / 10, tenths % 10) }
 }
 
-/// A GOTV setting in Steam's stored launch options that undoes [`TOKENS`], as "tv_enable 0" (a
-/// setting given no value reads as its name alone). Steam adds those options after the app's, so
-/// theirs win. Bot Mode never edits them; a launch with one records nothing and says why.
-pub fn steam_conflict(steam_options: &str) -> Option<String> {
-    let tokens = crate::botmode::launch::split(steam_options).unwrap_or_default();
-    let ours: Vec<(&str, &str)> = TOKENS.chunks(2).map(|c| (&c[0][1..], c[1])).collect();
-    for (i, t) in tokens.iter().enumerate() {
-        let Some(name) = t.strip_prefix('+') else { continue };
-        let Some(&(cvar, want)) = ours.iter().find(|(c, _)| c.eq_ignore_ascii_case(name)) else { continue };
-        let value = tokens.get(i + 1).filter(|v| !v.starts_with('+') && !v.starts_with('-'));
-        if value.map(String::as_str) != Some(want) {
-            return Some(value.map_or(cvar.to_string(), |v| format!("{cvar} {v}")));
-        }
-    }
-    None
+/// A GOTV setting Steam's stored launch options mention, in any form: `+tv_enable 1`,
+/// `-TV_AUTORECORD`, a quoted `"+tv_enable 0"`, with any value or none. Steam adds those options
+/// after the app's, so whatever they set wins over [`TOKENS`]. Their values are not read: Bot Mode
+/// never records half on, and never edits Steam's options, so a launch with one records nothing and
+/// says which.
+pub fn steam_conflict(steam_options: &str) -> Option<&'static str> {
+    let lower = steam_options.to_ascii_lowercase();
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+    ["tv_enable", "tv_autorecord", "tv_maxclients"].into_iter().find(|name| {
+        lower.match_indices(name).any(|(i, _)| !word(lower[..i].chars().next_back()) && !word(lower[i + name.len()..].chars().next()))
+    })
 }
 
 /// The launch records when the setting is on, Steam's stored launch options (`steam_options`, when
@@ -808,7 +829,7 @@ pub fn status(store: &Store, s: &AppSettings) -> Result<DemoStore, String> {
         Ok(f) => (Some(f), None),
         Err(e) => (None, Some(e)),
     };
-    let present = |m: &Meta| m.state != State::Missing && store.dem(&m.id).exists();
+    let present = |m: &Meta| m.state != State::Missing && store.has_dem(&m.id);
     let last_failure = metas.iter().rev().find(|m| m.state == State::Failed).map(|m| Failure { id: m.id.clone(), reason: m.fail_reason.clone(), detail: m.fail_detail.clone() });
     Ok(DemoStore {
         folder: store.root.display().to_string(),
@@ -824,7 +845,7 @@ pub fn status(store: &Store, s: &AppSettings) -> Result<DemoStore, String> {
             .into_iter()
             .rev()
             .map(|m| DemoRow {
-                state: if m.state != State::Missing && !store.dem(&m.id).exists() { State::Missing } else { m.state },
+                state: if m.state != State::Missing && !store.has_dem(&m.id) { State::Missing } else { m.state },
                 id: m.id,
                 map: m.map,
                 created_utc: m.created_utc,
@@ -1057,7 +1078,18 @@ fn extract(store: &Store, layout: &Layout, x: &crate::Extractor, version: &str, 
     if let Ok(Some(user)) = crate::valve_dir().and_then(|d| crate::valve_user(&d)) {
         args.extend(["--user".into(), user.into()]);
     }
-    args.extend(ids.iter().map(|id| store.dem(id).into_os_string()));
+    // each demo passes the store's checks before the importer is given its path
+    let mut paths = Vec::new();
+    for id in &ids {
+        match store.dem_checked(id) {
+            Ok(p) => paths.push(p.into_os_string()),
+            Err(why) => store.refused(&dem_name(id), &why),
+        }
+    }
+    if paths.is_empty() {
+        return Ok(());
+    }
+    args.extend(paths);
     let run = x.run(&args, progress)?;
     let rows = run.summary.as_ref().and_then(|s| s.get("results")).and_then(|r| r.as_array()).cloned().unwrap_or_default();
     let lock = op_lock_soon(layout)?;
@@ -1120,6 +1152,7 @@ pub async fn import_local(app: tauri::AppHandle) -> Result<LocalImport, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::botmode::hash;
     use crate::botmode::process::fake::Running;
     use crate::botmode::testutil::{fake_game, junction, write, Scratch};
 
@@ -1207,14 +1240,14 @@ mod tests {
         junction(&layout.target("replays"), &elsewhere);
         let store = Store::of(&layout).unwrap();
         let lock = OpLock::acquire(&layout).unwrap();
-        assert!(take(&store, &layout, &CLOSED, &lock, later()).unwrap_err().contains("junction"));
+        assert!(take(&store, &layout, &CLOSED, &lock, later()).unwrap_err().contains("is a junction or link"));
         assert!(elsewhere.join(AUTO).exists());
 
         // nor kept in a store folder that is one
         fs::remove_dir(layout.target("replays")).unwrap();
         write(&layout.target(&format!("replays/{AUTO}")), b"a recorded match");
         junction(&store.root, &elsewhere);
-        assert!(take(&store, &layout, &CLOSED, &lock, later()).unwrap_err().contains("junction"));
+        assert!(take(&store, &layout, &CLOSED, &lock, later()).unwrap_err().contains("is a junction or link"));
         assert!(layout.target(&format!("replays/{AUTO}")).exists());
     }
 
@@ -1285,7 +1318,7 @@ mod tests {
         sweep(&store, &lock, &policy(20, 0, 10), None, 0, None, None).unwrap();
         let st = status(&store, &AppSettings::default()).unwrap();
         assert_eq!((st.used, st.demos[0].state), (0, State::Missing));
-        assert!(fs::read_to_string(store.ledger()).unwrap().contains("\"missing\""));
+        assert!(fs::read_to_string(ledger(&store)).unwrap().contains("\"missing\""));
     }
 
     #[test]
@@ -1336,26 +1369,85 @@ mod tests {
         store.write_meta(&meta(id, "2026-11-01T12:00:00Z", 6, "200", state)).unwrap();
     }
 
+    fn ledger(store: &Store) -> PathBuf {
+        store.root.join(LEDGER)
+    }
+
+    /// A file symlink at `link`, or where Windows does not let this account make one, a junction:
+    /// both are reparse points, which the store must not follow.
+    fn reparse_at(link: &Path, file: &Path) {
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(file, link).is_ok() {
+            return;
+        }
+        junction(link, file.parent().unwrap());
+    }
+
     #[test]
-    fn a_store_reached_through_a_junction_is_refused_for_every_read_and_write() {
-        // fails if a store is opened without checking demos\ and the folder above it: a delete through
-        // the junction removes the target's files, outside the store
+    fn a_junction_above_the_store_is_allowed_and_its_file_checks_still_hold_but_one_at_the_store_is_refused() {
+        // fails if a store under a relocated AppData (a junction above demos\) is refused, if a
+        // junction at demos\ itself is followed, or if a hard-linked sidecar is read as the store's own
         let s = Scratch::new("demos-store-junction");
         let layout = fake_game(&s);
-        let elsewhere = Store { root: s.0.join("elsewhere"), base: s.0.clone() };
-        stored(&elsewhere, "20261101T1200Z_de_dust2_00000001", State::Extracted);
-        junction(&s.0.join("demos"), &elsewhere.root);
+        let elsewhere = s.0.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        junction(&s.0.join("demos"), &elsewhere);
         let e = Store::of(&layout).err().expect("a junctioned demos folder is refused");
-        assert!(e.contains("junction"), "{e}");
-        assert!(Store::in_base(&s.0).is_err());
+        assert!(e.contains("is a junction or link"), "{e}");
 
-        // the folder above the store, %APPDATA%\BotMatchStats, through a junction too
         let real = s.0.join("real");
-        fs::create_dir_all(real.join("demos")).unwrap();
+        fs::create_dir_all(real.join("data")).unwrap();
         junction(&s.0.join("linked"), &real);
-        let through = Layout { csgo: layout.csgo.clone(), data: s.0.join("linked").join("data") };
-        assert!(Store::of(&through).err().expect("a junctioned base is refused").contains("junction"));
-        assert!(elsewhere.dem("20261101T1200Z_de_dust2_00000001").exists());
+        let moved = Layout { csgo: layout.csgo.clone(), data: s.0.join("linked").join("data") };
+        let store = Store::of(&moved).expect("a junction above the store is allowed");
+        let id = "20261101T1200Z_de_dust2_00000001";
+        stored(&store, id, State::Extracted);
+        assert_eq!(store.read_meta(id).unwrap().id, id);
+        assert!(real.join("demos").join(dem_name(id)).exists());
+
+        let outside = s.0.join("outside.json");
+        fs::write(&outside, serde_json::to_string(&meta(id, "2026-11-02T12:00:00Z", 9, "200", State::Extracted)).unwrap()).unwrap();
+        fs::remove_file(real.join("demos").join(meta_name(id))).unwrap();
+        fs::hard_link(&outside, real.join("demos").join(meta_name(id))).unwrap();
+        let e = store.read_meta(id).unwrap_err();
+        assert!(e.contains("hard links"), "{e}");
+        assert!(delete(&store, &OpLock::acquire(&moved).unwrap(), id).is_err());
+        assert!(outside.exists() && real.join("demos").join(dem_name(id)).exists());
+    }
+
+    #[test]
+    fn a_hard_linked_ledger_is_never_written() {
+        // fails if the ledger is opened by its path and appended to: the record lands in the other file
+        let s = Scratch::new("demos-ledger-link");
+        let layout = fake_game(&s);
+        let store = Store::of(&layout).unwrap();
+        store.ensure().unwrap();
+        let outside = s.0.join("notes.txt");
+        fs::write(&outside, b"the user's own file\n").unwrap();
+        fs::hard_link(&outside, ledger(&store)).unwrap();
+        let e = store.log("20261101T1200Z_de_dust2_00000001", "taken", None).unwrap_err();
+        assert!(e.contains("hard links"), "{e}");
+        assert_eq!(fs::read(&outside).unwrap(), b"the user's own file\n");
+    }
+
+    #[test]
+    fn a_linked_orphan_demo_is_left_alone_and_recorded() {
+        // fails if an orphan .dem is read by its path: a link there would get a sidecar for, and later
+        // a sweep's delete of, a file outside the store
+        let s = Scratch::new("demos-orphan-link");
+        let layout = fake_game(&s);
+        fs::create_dir_all(layout.target("replays")).unwrap();
+        let store = Store::of(&layout).unwrap();
+        store.ensure().unwrap();
+        let outside = s.0.join("elsewhere").join("keep.dem");
+        write(&outside, b"not a demo of the store's");
+        let id = "20261101T1200Z_de_dust2_00000001";
+        reparse_at(&store.dem(id), &outside);
+        let lock = OpLock::acquire(&layout).unwrap();
+        take(&store, &layout, &CLOSED, &lock, later()).unwrap();
+        assert!(store.metas().unwrap().is_empty());
+        assert!(fs::read_to_string(ledger(&store)).unwrap().contains("\"refused\""));
+        assert_eq!(fs::read(&outside).unwrap(), b"not a demo of the store's");
     }
 
     /// CS2 closed for the first `closed` checks, then running.
@@ -1365,28 +1457,74 @@ mod tests {
             Ok(self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= self.1)
         }
     }
+    fn starts_after(closed: usize) -> StartsAfter {
+        StartsAfter(std::sync::atomic::AtomicUsize::new(0), closed)
+    }
+
+    /// A demo in `replays\` whose last write is two minutes old.
+    fn settled(layout: &Layout, bytes: &[u8]) -> PathBuf {
+        let src = layout.target(&format!("replays/{AUTO}"));
+        write(&src, bytes);
+        fs::File::options().write(true).open(&src).unwrap().set_modified(SystemTime::now() - Duration::from_secs(120)).unwrap();
+        src
+    }
 
     #[test]
-    fn a_demo_that_changes_while_it_is_hashed_waits_and_a_cs2_started_meanwhile_stops_the_take() {
-        // fails if a take trusts one look at the file (it would store half a demo), or checks CS2 only
-        // once (it would move a demo out from under a CS2 that started during the take)
-        let s = Scratch::new("demos-growing");
+    fn a_demo_another_program_holds_open_waits_and_a_cs2_started_meanwhile_stops_the_take() {
+        // fails if a take opens the demo shared (it would move a demo CS2 is still writing), or checks
+        // CS2 only once (it would move a demo out from under a CS2 that started during the take)
+        let s = Scratch::new("demos-held");
         let layout = fake_game(&s);
-        let src = layout.target(&format!("replays/{AUTO}"));
-        write(&src, b"recording");
+        let src = settled(&layout, b"recording");
         let store = Store::of(&layout).unwrap();
         let lock = OpLock::acquire(&layout).unwrap();
-        let grows = |p: &Path| {
-            fs::OpenOptions::new().append(true).open(p).unwrap().write_all(b" more").unwrap();
-            hash::file(p)
-        };
-        let t = take_with(&store, &layout, &CLOSED, &lock, later(), &grows).unwrap();
+        let held = fs::File::options().append(true).open(&src).unwrap();
+        let t = take(&store, &layout, &CLOSED, &lock, SystemTime::now()).unwrap();
         assert_eq!((t.taken.len(), t.waiting), (0, 1));
+        drop(held);
         assert!(src.exists() && store.metas().unwrap().is_empty());
 
-        let starts = StartsAfter(std::sync::atomic::AtomicUsize::new(0), 1);
-        assert!(take(&store, &layout, &starts, &lock, later()).unwrap_err().contains("CS2 is running"));
+        assert!(take(&store, &layout, &starts_after(1), &lock, SystemTime::now()).unwrap_err().contains("CS2 is running"));
         assert!(src.exists() && store.metas().unwrap().is_empty());
+    }
+
+    /// A move that finds the store on another volume, as a Steam library on another drive does.
+    fn other_volume(_: &handle::Dir, _: &fs::File, _: &str) -> std::io::Result<()> {
+        Err(std::io::Error::from_raw_os_error(handle::NOT_SAME_DEVICE))
+    }
+
+    #[test]
+    fn across_volumes_a_demo_is_copied_and_its_original_removed_only_while_cs2_stays_closed() {
+        // fails if the original is removed without checking CS2 after the copy, or the copy is not
+        // checked and renamed into place, or a later take does not finish the job
+        let s = Scratch::new("demos-cross");
+        let layout = fake_game(&s);
+        let src = settled(&layout, b"a recorded match");
+        let store = Store::of(&layout).unwrap();
+        let lock = OpLock::acquire(&layout).unwrap();
+        let t = take_with(&store, &layout, &CLOSED, &lock, SystemTime::now(), &other_volume).unwrap();
+        assert_eq!(t.taken.len(), 1);
+        assert!(!src.exists());
+        assert_eq!(fs::read(store.dem(&t.taken[0])).unwrap(), b"a recorded match");
+        assert!(!all_files(&store.root).contains(".part"));
+
+        // CS2 starts during the copy: the copy stands and the original stays
+        let s = Scratch::new("demos-cross-start");
+        let layout = fake_game(&s);
+        let src = settled(&layout, b"a recorded match");
+        let store = Store::of(&layout).unwrap();
+        let lock = OpLock::acquire(&layout).unwrap();
+        let e = take_with(&store, &layout, &starts_after(2), &lock, SystemTime::now(), &other_volume).unwrap_err();
+        assert!(e.contains("CS2 is running"), "{e}");
+        let kept = store.metas().unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(fs::read(store.dem(&kept[0].id)).unwrap(), b"a recorded match");
+        assert!(src.exists());
+        // with CS2 closed, the next take finds the copy by its hash and removes the original
+        let t = take_with(&store, &layout, &CLOSED, &lock, SystemTime::now(), &other_volume).unwrap();
+        assert_eq!((t.taken.len(), t.refused.len()), (0, 0));
+        assert!(!src.exists());
+        assert_eq!(store.metas().unwrap().len(), 1);
     }
 
     #[test]
@@ -1397,25 +1535,29 @@ mod tests {
         let layout = fake_game(&s);
         let store = Store::of(&layout).unwrap();
         store.ensure().unwrap();
-        fs::write(store.ledger(), "{\"at\":\"2026-11-01T12:00:00Z\",\"id\":\"a\",\"event\":\"taken\",\"reason\":null}\n{\"at\":\"2026-11").unwrap();
+        fs::write(ledger(&store), "{\"at\":\"2026-11-01T12:00:00Z\",\"id\":\"a\",\"event\":\"taken\",\"reason\":null}\n{\"at\":\"2026-11").unwrap();
         store.log("20261101T1200Z_de_dust2_00000001", "extracted", None).unwrap();
-        let text = fs::read_to_string(store.ledger()).unwrap();
+        let text = fs::read_to_string(ledger(&store)).unwrap();
         let events: Vec<String> = text.lines().map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["event"].as_str().unwrap().to_string()).collect();
         assert_eq!(events, ["taken", "ledger_repaired", "extracted"]);
         assert!(text.ends_with('\n'));
     }
 
     #[test]
-    fn steam_options_that_undo_gotv_turn_recording_off_and_say_which() {
-        // fails if Steam's stored options are not read: Steam adds them after the app's tokens, so
-        // "+tv_enable 0" there turns recording off while the dialog says it is on
+    fn steam_options_that_mention_gotv_in_any_form_turn_recording_off_and_say_which() {
+        // fails if Steam's stored options are not read, or only some forms are: Steam adds them after
+        // the app's tokens, so "-tv_enable" or a quoted "+tv_enable 0" there leaves recording half on
+        // while the dialog says it is on
         let s = AppSettings::default();
-        let r = recording(&s, Ok(500 * GB), Some("-novid +tv_enable 0"));
-        assert_eq!((r.tokens.len(), r.blocked.as_deref()), (0, Some("Recording off this time: your Steam launch options set tv_enable 0.")));
-        assert_eq!(steam_conflict("+TV_MAXCLIENTS 5 -high"), Some("tv_maxclients 5".to_string()));
-        assert_eq!(steam_conflict("+tv_autorecord"), Some("tv_autorecord".to_string()));
-        // the same values as the app's, or none of the three, leave recording on
-        assert_eq!(steam_conflict("-novid +tv_enable 1 +tv_autorecord 1 +tv_maxclients 0 +fps_max 0"), None);
+        let r = recording(&s, Ok(500 * GB), Some("-novid \"+tv_enable 0\""));
+        assert_eq!((r.tokens.len(), r.blocked.as_deref()), (0, Some("Recording off this time: your Steam launch options set tv_enable.")));
+        assert_eq!(steam_conflict("-novid -tv_enable"), Some("tv_enable"));
+        assert_eq!(steam_conflict("+TV_AUTORECORD false"), Some("tv_autorecord"));
+        assert_eq!(steam_conflict("+tv_maxclients=5"), Some("tv_maxclients"));
+        // even the app's own values: the options are not parsed, so none is trusted
+        assert_eq!(steam_conflict("+tv_enable 1"), Some("tv_enable"));
+        // a longer name that only starts like one is another setting
+        assert_eq!(steam_conflict("-novid +tv_enable_cheats 1 +fps_max 0"), None);
         assert_eq!(recording(&s, Ok(500 * GB), Some("-novid")).tokens.len(), TOKENS.len());
     }
 

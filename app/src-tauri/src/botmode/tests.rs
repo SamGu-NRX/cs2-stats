@@ -2854,16 +2854,38 @@ fn a_recorded_launch_adds_gotv_after_the_users_options_and_a_floor_breach_drops_
 }
 
 #[test]
-fn steam_options_that_undo_gotv_launch_without_the_tokens_and_leave_steam_alone() {
-    // fails if Steam's stored "+tv_autorecord 0", which Steam adds after the app's tokens, is not
-    // read: the dialog would say the match is recorded while nothing is
-    let s = Scratch::new("launch-record-steam");
-    let steam = fake_steam_config(&s, Some("-novid +tv_autorecord 0"));
-    let layout = installed(&s);
-    settings::set_demo_policy(&layout, settings::DemoPolicy { cap_gb: 20.0, floor_gb: 0.0, keep_last: 10 }, None).unwrap();
-    let lock = OpLock::acquire(&layout).unwrap();
-    let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
-    assert_eq!(plan.args, ["-applaunch", "730", "-insecure"]);
-    assert_eq!(plan.recording.blocked.as_deref(), Some("Recording off this time: your Steam launch options set tv_autorecord 0."));
-    assert_eq!(steam.read_options().unwrap(), "-novid +tv_autorecord 0");
+fn steam_options_that_mention_gotv_launch_without_the_tokens_and_leave_steam_alone() {
+    // fails if a stored -tv_enable, a quoted "+tv_enable 0" or +TV_AUTORECORD false, which Steam
+    // adds after the app's tokens, is not seen: the dialog would say the match is recorded while it
+    // is not, or only half
+    for (opts, cvar) in [("-novid -tv_enable", "tv_enable"), ("\"+tv_enable 0\"", "tv_enable"), ("+TV_AUTORECORD false", "tv_autorecord")] {
+        let s = Scratch::new("launch-record-steam");
+        // Steam writes a quote in localconfig.vdf escaped
+        let steam = fake_steam_config(&s, Some(&opts.replace('"', "\\\"")));
+        let layout = installed(&s);
+        settings::set_demo_policy(&layout, settings::DemoPolicy { cap_gb: 20.0, floor_gb: 0.0, keep_last: 10 }, None).unwrap();
+        let lock = OpLock::acquire(&layout).unwrap();
+        let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+        assert_eq!(plan.args, ["-applaunch", "730", "-insecure"], "{opts}");
+        assert_eq!(plan.recording.blocked, Some(format!("Recording off this time: your Steam launch options set {cvar}.")), "{opts}");
+        launch::check_start(&plan, &layout, &CLOSED, &steam).unwrap();
+        assert_eq!(steam.read_options().unwrap(), opts);
+    }
+}
+
+#[test]
+fn steam_options_changed_to_mention_gotv_after_the_plan_stop_a_recorded_launch() {
+    // fails if check_start trusts the options prepare read: one added since would undo the tokens
+    for opts in ["-tv_enable", "\"+tv_enable 0\"", "+TV_AUTORECORD false"] {
+        let s = Scratch::new("launch-record-steam-late");
+        let steam = fake_steam_config(&s, Some("-novid"));
+        let layout = installed(&s);
+        settings::set_demo_policy(&layout, settings::DemoPolicy { cap_gb: 20.0, floor_gb: 0.0, keep_last: 10 }, None).unwrap();
+        let lock = OpLock::acquire(&layout).unwrap();
+        let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+        assert_eq!(&plan.args[2..4], ["-insecure", "+tv_enable"]);
+        let steam = fake_steam_config(&s, Some(&opts.replace('"', "\\\"")));
+        let e = launch::check_start(&plan, &layout, &CLOSED, &steam).unwrap_err();
+        assert!(e.contains("launch again"), "{opts}: {e}");
+    }
 }
