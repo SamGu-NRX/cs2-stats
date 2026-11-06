@@ -25,9 +25,11 @@ const count = (x: number | null | undefined): x is number => Number.isInteger(x)
 
 /**
  * The side the human's team played in each of `rounds`, read from one player who has a side in all of
- * them: the human, else a teammate (same starting side, which fixes the team), else an opponent, whose
- * side is the other one. Null when no player has. A null start side is on no team (adapter.ts teamOf),
- * so it names no teammate or opponent.
+ * them: the human, else a teammate (same starting side), else an opponent, whose side is the other one.
+ * Null when no player qualifies. The plugin sets a starting side once (Recorder.cs SetFreezePlayer), so
+ * a player who later switched teams keeps the old one: a teammate or opponent counts only if its side
+ * matched (or opposed) the human's in every round where both have one. A null start side is on no team
+ * (adapter.ts teamOf), so it names no teammate or opponent.
  */
 export function teamSides(m: MatchFile, rounds: number[]): Side[] | null {
   const start = m.players.startSide[m.human];
@@ -38,8 +40,14 @@ export function teamSides(m: MatchFile, rounds: number[]): Side[] | null {
   if (start === null) return null;
   for (const [pi, s] of m.players.startSide.entries()) {
     if (pi === m.human || s === null) continue;
+    const mate = s === start;
+    const consistent = m.rounds.side.every((row) => {
+      const a = row?.[m.human] ?? null;
+      const b = row?.[pi] ?? null;
+      return a === null || b === null || (a === b) === mate;
+    });
     const sides = sidesOf(pi);
-    if (all(sides)) return s === start ? sides : sides.map(other);
+    if (consistent && all(sides)) return mate ? sides : sides.map(other);
   }
   return null;
 }

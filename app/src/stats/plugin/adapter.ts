@@ -243,7 +243,9 @@ export function pluginToTables(m: MatchFile): MatchTables {
     // kill, null when he has no pawn then (a grenade thrown before his death), which is not his own
     // body. Unlinked, a kBody naming a bot stands, since nothing says when the grenade was thrown: on 41
     // recorded files the game's round stats credit the one such kill (a molotov) to that bot. Unlinked
-    // with kBody null, only a body the file has observed by the kill counts.
+    // with kBody null (his own pawn, or none), the timeline at the kill decides: his own body there
+    // credits him, and a bot or no body leaves no attacker, since only a body the file has observed by
+    // the kill counts (throwerBody).
     const tick = k.tick[i];
     const named = k.killer[i];
     const kb = bodyEntry(k.kBody, i);
@@ -336,7 +338,8 @@ export function pluginToTables(m: MatchFile): MatchTables {
     if (!covered(ri)) continue;
     const p = th.pos[i];
     const by = th.thrower[i];
-    const thrower = by === null ? null : bodyAt(by, ri, th.tick[i]);
+    // a throw rebuilt from a detonation has only the detonation tick, so only an observed body counts
+    const thrower = by === null ? null : bodyAt(by, ri, th.tick[i], { observed: !m.throws });
     if (thrower === null && by !== null) continue;
     add(t.grenade_throws!, "grenade_throws", {
       tick: th.tick[i], round: ri + 1, steamid: thrower === null ? null : key[thrower], weapon: THROW_CLASS[th.type[i]],

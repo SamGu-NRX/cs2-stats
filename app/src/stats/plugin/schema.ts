@@ -345,6 +345,7 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
   const nPlayers = checkTable(where, m.players, "players");
   const nRounds = checkTable(where, m.rounds, "rounds");
   for (const t of ["kills", "damage", "blinds", "grenades", "pos"] as const) checkTable(where, m[t], t);
+  checkBodies(where, m.kills as Kills, nPlayers);
   const aim = m.aim as Record<string, unknown> | undefined;
   if (typeof aim !== "object" || aim === null) throw new SchemaError(where, `field "aim" must be an object`);
   checkTable(where, aim.engagements, "engagements");
@@ -421,6 +422,23 @@ function checkTakeovers(where: string, table: unknown, m: MatchFile): void {
     if (body !== null && (!index(body, nPlayers) || !players.isBot[body])) {
       throw new SchemaError(where, `takeovers.body[${i}] is ${JSON.stringify(body)}, expected null or a bot's index`);
     }
+  }
+}
+
+/**
+ * kills.kBody and kills.vBody may be absent or shorter than the kills table (bodies.ts bodyEntry), but
+ * an entry present must be null or a player index, since the adapter credits that player.
+ */
+function checkBodies(where: string, k: Kills, nPlayers: number): void {
+  for (const col of ["kBody", "vBody"] as const) {
+    const c = k[col] as unknown;
+    if (c === undefined) continue;
+    if (!Array.isArray(c)) throw new SchemaError(where, `column "kills.${col}" is not an array`);
+    c.forEach((x, i) => {
+      if (x !== null && !(Number.isInteger(x) && x >= 0 && x < nPlayers)) {
+        throw new SchemaError(where, `kills.${col}[${i}] is ${JSON.stringify(x)}, expected null or a player index 0..${nPlayers - 1}`);
+      }
+    });
   }
 }
 

@@ -266,6 +266,20 @@ describe("scores in a round the human sat out", () => {
     expect(roundResults(m).winSide.slice(0, 2)).toEqual([null, null]);
   });
 
+  it("use no teammate or opponent who switched teams, which its starting side does not show", () => {
+    // fails if a player's starting side alone makes it a teammate or opponent: the plugin sets it once,
+    // so one who switched keeps the old one. The opponent joins the human's side in round 3, and the
+    // teammate plays T against the human's CT, so neither can vouch for round 2
+    const m = file([true, true, true], [3, 3, 3], { maxrounds: 6 });
+    m.players = { ...m.players, key: [...m.players.key, "B:mate"], name: [...m.players.name, "mate"], isBot: [...m.players.isBot, true], startSide: [...m.players.startSide, 3] };
+    m.rounds.equip = [0, 1, 2].map(() => [4000, 4000, 4000]);
+    m.rounds.money = [0, 1, 2].map(() => [800, 800, 800]);
+    m.rounds.side = [[3, 2, null], [null, 2, null], [3, 3, null]];
+    expect(roundResults(m).winSide.slice(0, 2)).toEqual([null, null]);
+    m.rounds.side = [[3, 2, 2], [null, null, 2], [3, 2, 2]];
+    expect(roundResults(m).winSide.slice(0, 2)).toEqual([null, null]);
+  });
+
   it("name each round's teams from the side the human's team played, so derive keeps every player on his team", () => {
     // fails if a round the human sat out names the opponents as CT: derive reads the CT team from that
     // name, which would put his CT teammate on the other team and flip the round's team mapping

@@ -84,7 +84,13 @@ export function bodyLookup(m: MatchFile): BodyAt {
     };
     const deaths = kills.filter((i) => K.victim[i] === pi && ownDeath(i)).map((i) => K.tick[i]);
     const alive = (aliveAt.get(key) ?? []).filter((tick) => !table || !driving(tick));
-    const own = lives(m.rounds.alive0?.[ri]?.[pi] === 1, deaths, alive);
+    // His own body at round start: alive0 when recorded; when missing, from his first explicit own-body
+    // observation, a gun or knife kill with kBody null or an alive position row, and unresolved before it.
+    const a0 = m.rounds.alive0?.[ri]?.[pi] ?? null;
+    const ownKill = kills.find((i) => K.killer[i] === pi && bodyEntry(K.kBody, i) === null && !grenadeKill(m, i));
+    const seenOwn = Math.min(ownKill === undefined ? Infinity : K.tick[ownKill], alive[0] ?? Infinity);
+    const start = a0 === 1 ? -Infinity : a0 === 0 ? alive[0] : Number.isFinite(seenOwn) ? seenOwn : undefined;
+    const own = lives(start, deaths, alive);
     plan.set(key, table ? fromTable(rows, pi, own) : fromKills(m, kills, pi, own, alive));
   }));
   return (pi, ri, tick, o) => {
@@ -98,10 +104,10 @@ export function bodyLookup(m: MatchFile): BodyAt {
 /** A kill by a grenade or its fire: linked to its grenades row, or with a grenade weapon. */
 export const grenadeKill = (m: MatchFile, i: number) => (m.kills.nade?.[i] ?? null) !== null || GRENADE_WEAPONS.has(m.weapons[m.kills.weapon[i]] ?? "");
 
-/** His own body's lives in a round, from the alive-at-freeze-end flag, his own deaths and his alive position rows (all sorted). */
-function lives(aliveAtStart: boolean, deaths: number[], alive: number[]): Life[] {
+/** His own body's lives in a round, from where the first starts (none: no life), his own deaths and his alive position rows (all sorted). */
+function lives(first: number | undefined, deaths: number[], alive: number[]): Life[] {
   const out: Life[] = [];
-  let from: number | undefined = aliveAtStart ? -Infinity : alive[0];
+  let from: number | undefined = first;
   while (from !== undefined) {
     const start: number = from;
     const death: number | undefined = deaths.find((d) => d >= start);

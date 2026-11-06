@@ -1,6 +1,6 @@
 // The plugin's recon tally, rebuilt from a match file's rows, and how many players each recon round read
 // (pnpm takeover-check).
-import { bodyLookup } from "../src/stats/plugin/bodies";
+import { bodyEntry, bodyLookup } from "../src/stats/plugin/bodies";
 import type { MatchFile } from "../src/stats/plugin/schema";
 
 export type Field = "k" | "d" | "a" | "dmg";
@@ -35,8 +35,13 @@ export function tallies(m: MatchFile): (ri: number, pi: number) => Tally {
   const K = m.kills;
   for (let i = 0; i < K.ri.length; i++) {
     const ri = K.ri[i];
-    const v = basis ? K.vBody?.[i] ?? K.victim[i] : K.victim[i];
-    const killer = K.killer[i] === null ? null : basis ? K.kBody?.[i] ?? K.killer[i] : K.killer[i];
+    // an entry missing from the column says nothing, so the body lookup names it, as in bodies.ts
+    const named = (col: (number | null)[] | undefined, pi: number) => {
+      const e = bodyEntry(col, i);
+      return e === undefined ? lookup(pi, ri, K.tick[i]) ?? pi : e ?? pi;
+    };
+    const v = basis ? named(K.vBody, K.victim[i]) : K.victim[i];
+    const killer = K.killer[i] === null ? null : basis ? named(K.kBody, K.killer[i]!) : K.killer[i];
     at(ri, v).d++;
     if (killer !== null && killer !== v && enemy(ri, killer, v)) at(ri, killer).k++;
     const as = K.assister[i] ?? K.flashAssister[i];
