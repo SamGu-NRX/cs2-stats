@@ -738,9 +738,11 @@ pub fn run() {
         // the folder picker for the pro match library (pro.rs choose_pro_library), called from Rust only
         .plugin(tauri_plugin_dialog::init())
         // Bot Mode left on by a session that lost its supervisor is dealt with at once.
-        .setup(|_app| {
+        .setup(|app| {
             if !smoke() {
                 botmode::commands::on_app_start();
+                // demos a session recorded while the app was closed (design/recording.md)
+                demos::on_app_start(app.handle().clone());
             }
             // FFmpeg part files a crashed finish left behind; off the UI's start path
             std::thread::spawn(clips::on_app_start);

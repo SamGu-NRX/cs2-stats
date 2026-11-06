@@ -2852,3 +2852,18 @@ fn a_recorded_launch_adds_gotv_after_the_users_options_and_a_floor_breach_drops_
     assert_eq!(plan.args, ["-applaunch", "730", "-insecure", "+exec", "botmode"]);
     assert!(plan.recording.blocked.as_deref().is_some_and(|b| b.starts_with("Recording off this time: ")), "{:?}", plan.recording);
 }
+
+#[test]
+fn steam_options_that_undo_gotv_launch_without_the_tokens_and_leave_steam_alone() {
+    // fails if Steam's stored "+tv_autorecord 0", which Steam adds after the app's tokens, is not
+    // read: the dialog would say the match is recorded while nothing is
+    let s = Scratch::new("launch-record-steam");
+    let steam = fake_steam_config(&s, Some("-novid +tv_autorecord 0"));
+    let layout = installed(&s);
+    settings::set_demo_policy(&layout, settings::DemoPolicy { cap_gb: 20.0, floor_gb: 0.0, keep_last: 10 }, None).unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+    assert_eq!(plan.args, ["-applaunch", "730", "-insecure"]);
+    assert_eq!(plan.recording.blocked.as_deref(), Some("Recording off this time: your Steam launch options set tv_autorecord 0."));
+    assert_eq!(steam.read_options().unwrap(), "-novid +tv_autorecord 0");
+}

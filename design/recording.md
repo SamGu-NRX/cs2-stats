@@ -32,6 +32,8 @@ Rejected:
 
 When `record_demos` is on, `launch::steam_args` appends `+tv_enable 1 +tv_autorecord 1 +tv_maxclients 0` after the user's own launch options. `-insecure` stays first and the secure-token check is unchanged. The launch dialog shows the tokens.
 
+Steam adds CS2's stored launch options after the app's, so a `tv_enable`, `tv_autorecord` or `tv_maxclients` there with another value wins over the tokens. The app never edits Steam's options. Such a launch goes ahead without the tokens, and the dialog says why, for example "Recording off this time: your Steam launch options set tv_enable 0." The options are read again just before Steam is asked to start CS2; if they changed to undo the recording, the launch stops and asks to be started again.
+
 Each of these is a hypothesis, checked in the supervised session below:
 - `+tv_enable 1` on the command line is early enough for the first match. If not, it moves to `cfg/autoexec.cfg` through the existing merged-cfg write.
 - `tv_maxclients 0` does not stop recording.
@@ -77,7 +79,9 @@ local\<id>\v-<ver>-<nonce>\  schema v1 tables, with CURRENT and COMPLETE as in v
 - A demo whose extraction failed is kept until the extractor version changes once.
 - The sweep runs before every Bot Mode launch and at session end, both with CS2 closed.
 
-**Extraction.** The host runs `local_import.py` at session end (the session's `Exited` outcome), and at app start for any `auto-*.dem` in `replays\` older than 60 s and not in the ledger. It runs the importer the way `import_valve` does, with `CS2_MAPDATA`.
+**Extraction.** An import takes finished demos out of `replays\`, runs `local_import.py` on the ones not yet extracted, and sweeps. It runs in two places. The Bot Mode supervisor runs one after a session ends with CS2 exited, once it has released the session lease, so it works with the app closed. The app runs one at start, for anything a session left behind. A file lock in the Bot Mode folder lets one run at a time across both processes. The take checks again that CS2 is closed, before each demo it moves. A demo is taken only once its last write is 60 s old and its size and modified time are the same before and after it is hashed. The importer runs the way `import_valve` runs it, with `CS2_MAPDATA` when it is set. When the importer is not installed, the take and the sweep still run, so demos never pile up in `replays\` or past the cap. Until the app sends its keeps, a sweep keeps pinned, unextracted and the newest demos, under the cap and above the floor.
+
+Every read and write of the store opens it fresh, and refuses it when `demos\` or `%APPDATA%\BotMatchStats` is a junction or link: a delete through one would remove files outside the store. Each ledger record is written whole with its newline and flushed to disk. A record cut off by a crash is dropped before the next one is written, and the drop is itself a record (`ledger_repaired`).
 
 ## Reading the demos
 
