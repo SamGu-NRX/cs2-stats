@@ -649,7 +649,7 @@ pub struct Recording {
     pub floor: u64,
 }
 
-/// "9.4", "10": GB with one decimal, none when whole.
+/// "9.4", "10": GB rounded down to one decimal, none when whole, so free space never reads as more than it is.
 pub fn gb(bytes: u64) -> String {
     let tenths = (bytes as f64 / GB as f64 * 10.0).floor() as u64;
     if tenths % 10 == 0 { format!("{}", tenths / 10) } else { format!("{}.{}", tenths / 10, tenths % 10) }
@@ -1136,7 +1136,8 @@ mod tests {
     #[test]
     fn recording_needs_the_floor_plus_a_match_free_and_says_why_it_is_off() {
         let s = AppSettings::default();
-        let r = recording(&s, Ok(94 * GB / 10));
+        // free space is shown rounded down to the tenth, so it never reads as more than there is
+        let r = recording(&s, Ok(94 * GB / 10 + GB / 20));
         assert_eq!((r.tokens.len(), r.blocked.as_deref()), (0, Some("Recording off this time: 9.4 GB free, floor 10 GB.")));
         let r = recording(&s, Ok(10 * GB + GB / 2));
         assert_eq!(r.blocked.as_deref(), Some("Recording off this time: 10.5 GB free, and a match needs 1 GB above the 10 GB floor."));
