@@ -109,7 +109,7 @@ export interface Kills {
   nade?: (number | null)[];
   /** grenades the victim still held, [he, flash, smoke, molotov, incgrenade, decoy] */
   vUtil?: (UtilCounts | null)[];
-  /** pi of the bot whose body the killer / victim was controlling (takeover); credit stays with killer / victim */
+  /** pi of the bot whose body the killer / victim was controlling (takeover); the kill or death is the bot's (bodies.ts) */
   kBody?: (number | null)[];
   vBody?: (number | null)[];
 }
@@ -165,7 +165,25 @@ export interface Recon {
   };
   mismatch?: { ri: number[]; pi: number[]; field: string[]; ours: number[]; game: number[]; hits: (number | null)[] };
   partial?: number[];
+  /**
+   * Rounds whose result code the plugin did not know, so winSide and how are null. From plugin 1.3.0,
+   * rounds whose winSide or how is still null after both the code and the round_end event.
+   */
   unknownResult?: number[];
+  /** rows lost to full buffers, by table name (plugin 1.3.0 adds "takeovers") */
+  dropped?: Record<string, number>;
+}
+
+/**
+ * Optional (plugin 1.3.0): when a player drives another's body. From `tick` on, controller `pi` drives
+ * the pawn of bot `body`; null means it is back in its own pawn or in none. Every round starts with
+ * every player in their own body. Rows a player makes in a bot's body belong to the bot (bodies.ts).
+ */
+export interface Takeovers {
+  ri: number[];
+  tick: number[];
+  pi: number[];
+  body: (number | null)[];
 }
 
 export interface Pos {
@@ -248,6 +266,7 @@ export interface MatchFile {
   /** los (plugin 1.1.0): an enemy entering (vis 1) or leaving (vis 0) the human's line of sight */
   aim: { engagements: Engagements; shots: Shots; hitMask?: HitMask; los?: { ri: number[]; tick: number[]; enemy: number[]; vis: (0 | 1)[] } };
   throws?: Throws;
+  takeovers?: Takeovers;
   recon?: Recon;
   /** players who disconnected during a recorded round */
   leaves?: { ri: number[]; tick: number[]; pi: number[]; alive: (0 | 1 | boolean)[] };
@@ -281,6 +300,7 @@ const TABLE_COLUMNS = {
   ],
   throws: ["ri", "tick", "thrower", "type", "pos"],
   hitMask: ["ri", "tick", "victim", "m0", "m1", "spotted"],
+  takeovers: ["ri", "tick", "pi", "body"],
 } as const;
 
 function checkTable(where: string, table: unknown, name: keyof typeof TABLE_COLUMNS): number {
@@ -337,10 +357,27 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
     }
   }
   if (m.throws !== undefined) checkTable(where, m.throws, "throws");
+  if (m.takeovers !== undefined) checkTakeovers(where, m.takeovers, nPlayers, nRounds);
   decodePositions(m.pos as Pos);
   const ffr = m.firstFullRound as number;
   if (ffr < 0 || ffr > nRounds) throw new SchemaError(where, `firstFullRound ${ffr} is outside 0..${nRounds}`);
   return raw as MatchFile;
+}
+
+/** Takeover rows must name a round, a tick, a player and another player's body (or null), so a bad row fails here rather than crediting the wrong player. */
+function checkTakeovers(where: string, table: unknown, nPlayers: number, nRounds: number): void {
+  const n = checkTable(where, table, "takeovers");
+  const t = table as Takeovers;
+  const index = (x: unknown, size: number) => Number.isInteger(x) && (x as number) >= 0 && (x as number) < size;
+  for (let i = 0; i < n; i++) {
+    if (!index(t.ri[i], nRounds)) throw new SchemaError(where, `takeovers.ri[${i}] is ${JSON.stringify(t.ri[i])}, expected a round index 0..${nRounds - 1}`);
+    if (!Number.isInteger(t.tick[i])) throw new SchemaError(where, `takeovers.tick[${i}] is ${JSON.stringify(t.tick[i])}, expected an integer tick`);
+    if (!index(t.pi[i], nPlayers)) throw new SchemaError(where, `takeovers.pi[${i}] is ${JSON.stringify(t.pi[i])}, expected a player index 0..${nPlayers - 1}`);
+    const body = t.body[i];
+    if (body !== null && (!index(body, nPlayers) || body === t.pi[i])) {
+      throw new SchemaError(where, `takeovers.body[${i}] is ${JSON.stringify(body)}, expected null or another player's index 0..${nPlayers - 1}`);
+    }
+  }
 }
 
 /**

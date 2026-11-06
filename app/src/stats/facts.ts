@@ -18,7 +18,9 @@ import type { Side } from "./tables";
 // 36: kill facts carry the killer's place and sightings the kill tick, for clip moments (stats/moments.ts)
 // 37: kill facts carry their duel groups (aGroup, vGroup) and player-rounds their freeze-end group (ecoGroup)
 // 38: KAST's survival (the scoreboard's and the eco-adjusted) does not end at a world death (rules.ts worldDeath)
-export const DERIVE_VERSION = 38;
+// 39: plugin files credit what a human does in a takeover bot's body to the bot (plugin/bodies.ts) and
+// rebuild the null winners of overtime and unknown result codes from the scores (plugin/results.ts)
+export const DERIVE_VERSION = 39;
 
 export interface MatchInfo {
   id: string;
