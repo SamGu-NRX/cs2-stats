@@ -146,20 +146,31 @@ function SessionStrip({ sessions, error, selected }: { sessions: SessionRow[] | 
           {sessions.map((x) => {
             const on = selected?.id === x.id;
             const n = x.files.length;
+            const awards = n > 1 && (x.awards.bestMatch || x.awards.mostKills);
+            // the chip is a button: what the takeover credit moved, and the game's figures, are said on it,
+            // in its tooltip and its accessible name, since a button holds no focusable child
+            const you = credit === "you";
+            const kills = you ? x.you.kills : x.kills, deaths = you ? x.you.deaths : x.deaths;
+            const most = x.awards.mostKills && (you && x.you.mostKills ? x.you.mostKills : x.awards.mostKills);
+            const movedKd = you && (x.you.kills !== x.kills || x.you.deaths !== x.deaths);
+            const movedMost = you && !!awards && !!x.awards.mostKills && !!x.you.mostKills && x.you.mostKills.kills !== x.awards.mostKills.kills;
+            const game = [movedKd ? `K–D is ${x.kills}–${x.deaths}` : null, movedMost && x.awards.mostKills ? `most kills is ${x.awards.mostKills.kills}` : null].filter(Boolean).join(", and its ");
+            const tip = game ? `Includes your play in bots you took over. The game's ${game}.` : undefined;
+            const label = `${sessionWhen(x)}: ${plural(n, "match", "matches")}, ${x.wins} won, ${x.losses} lost${x.ties ? `, ${x.ties} tied` : ""}, rating ${fmtRating(x.rating)}, K–D ${kills}–${deaths}${awards && most ? `, most kills ${most.kills}` : ""}.`;
             return (
               <li key={x.id}>
-                <button className="sess press" aria-pressed={on} onClick={() => setQuery("session", on ? null : x.id)}
-                  aria-label={`${sessionWhen(x)}: ${plural(n, "match", "matches")}, ${x.wins} won, ${x.losses} lost${x.ties ? `, ${x.ties} tied` : ""}, rating ${fmtRating(x.rating)}. ${on ? "Show every match" : "Show only these matches"}`}>
+                <button className="sess press" aria-pressed={on} onClick={() => setQuery("session", on ? null : x.id)} data-tip={tip}
+                  aria-label={`${label}${tip ? ` ${tip}` : ""} ${on ? "Show every match" : "Show only these matches"}`}>
                   <span className="sess__when">{sessionWhen(x)}</span>
                   <span className="sess__main">
                     <b className="num sess__rec">{x.wins}<span className="faint">–</span>{x.losses}{x.ties ? <><span className="faint">–</span>{x.ties}</> : null}</b>
                     <b className="disp sess__rating" style={{ color: x.rating === null ? undefined : ratingText(x.rating) }}>{fmtRating(x.rating)}</b>
                   </span>
-                  {/* the session is a button, so the marks are quiet and the line's tooltip names the game's K-D */}
-                  <span className="meta sess__sub" data-tip={credit === "you" && (x.you.kills !== x.kills || x.you.deaths !== x.deaths) ? `Includes your play in bots you took over; the game's K–D is ${x.kills}–${x.deaths}.` : undefined}>
+                  {/* the marks are quiet: the button's tooltip and name say what moved */}
+                  <span className="meta sess__sub">
                     {plural(n, "match", "matches")} · <span className="num"><MovedValue game={x.kills} you={x.you.kills} text={String} quiet />–<MovedValue game={x.deaths} you={x.you.deaths} text={String} quiet /></span> K–D
                   </span>
-                  {n > 1 && (x.awards.bestMatch || x.awards.mostKills) && (
+                  {awards && (
                     <span className="meta sess__awards">
                       {x.awards.bestMatch && <span>Best match <b className="num">{fmtRating(x.awards.bestMatch.rating)}</b></span>}
                       {x.awards.mostKills && <span>Most kills <b className="num"><MovedValue game={x.awards.mostKills.kills} you={x.you.mostKills?.kills ?? x.awards.mostKills.kills} text={String} quiet /></b></span>}

@@ -3,6 +3,7 @@
 // that decided the match, you against the other nine players, and Leetify's numbers for the match when it
 // is joined to a Leetify match (leetify/LeetifyMatchCard.tsx). Team facts live on the Advanced tab.
 import { useMemo, useState } from "react";
+import type { Measures } from "../../../stats/facts";
 import { ClutchBadge, DeathMark, FirstPip, MultiBadge, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DivergingBars } from "../../components/charts";
@@ -31,21 +32,31 @@ type Multi = Record<2 | 3 | 4 | 5, number>;
 /** A scoreboard row: a player, or the team total under the five players (pi null). */
 interface Row { key: string; pi: number | null; team: Team; isHuman: boolean; l: CreditedLine; multi: Multi | null; rated: boolean }
 
-/** The team total: counts summed over the five rows shown; rates from the team's rollup (both sides) or pooled from the rows (one side). */
-function teamRow(v: MatchModel, t: Team, rows: Row[], side: SideKey): Row {
-  const sum = (f: (r: Row) => number) => rows.reduce((a, r) => a + f(r), 0);
-  const m = { ...rows[0].l.m };
-  for (const k of ["kills", "deaths", "assists", "flashAssists", "tradedDeaths", "openingKills", "openingDeaths"] as const) m[k] = sum((r) => r.l.m[k]);
-  const team = side === "both" ? statLine(v.b.teams[t]) : null;
+/**
+ * The team total: counts summed over the five players' lines; rates from the team's rollup (both
+ * sides, `team`) or pooled from the lines (one side). It reads each player's game-credit line
+ * (CreditedLine.game), so it is the same under either takeover credit, whichever teams a driver and
+ * the body he drove were on.
+ */
+export function teamLine(lines: CreditedLine[], team: StatLine | null): CreditedLine {
+  const game = lines.map((l) => l.game);
+  const sum = (k: keyof Measures) => game.reduce((a, l) => a + l.m[k], 0);
+  const m = { ...game[0].m };
+  for (const k of ["kills", "deaths", "assists", "flashAssists", "tradedDeaths", "openingKills", "openingDeaths"] as const) m[k] = sum(k);
   // one side: the team's rates pooled from the five players' summed measures
-  const pooled = team ? null : pooledRates(rows.map((r) => r.l.m));
+  const pooled = team ? null : pooledRates(game.map((l) => l.m));
   const l: StatLine = {
-    ...(team ?? rows[0].l), m, kills: m.kills, deaths: m.deaths, assists: m.assists, diff: m.kills - m.deaths,
+    ...(team ?? game[0]), m, kills: m.kills, deaths: m.deaths, assists: m.assists, diff: m.kills - m.deaths,
     ...(team ? { adr: team.adr, kast: team.kast, hs: team.hs, swing: team.swing } : pooled!), rating: null,
   };
+  return { ...l, game: l, shift: null, changed: new Set(), moved: false };
+}
+
+function teamRow(v: MatchModel, t: Team, rows: Row[], side: SideKey): Row {
+  const sum = (f: (r: Row) => number) => rows.reduce((a, r) => a + f(r), 0);
   const multi = rows.every((r) => r.multi) ? ([2, 3, 4, 5] as const).reduce((o, k) => ({ ...o, [k]: sum((r) => r.multi![k]) }), {} as Multi) : null;
-  // a takeover moves play between two players of one team, so the total is the same under either credit
-  return { key: `total-${t}`, pi: null, team: t, isHuman: false, l: { ...l, game: l, shift: null, moved: false }, multi, rated: false };
+  const l = teamLine(rows.map((r) => r.l), side === "both" ? statLine(v.b.teams[t]) : null);
+  return { key: `total-${t}`, pi: null, team: t, isHuman: false, l, multi, rated: false };
 }
 
 export default function Overview({ v, file }: TabProps) {

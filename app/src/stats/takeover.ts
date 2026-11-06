@@ -21,6 +21,12 @@ export function shiftOf(m: Partial<Measures>): Shift {
   };
 }
 
+/** Whether "You" changes any of these measures. */
+export function moved(m: Partial<Measures>): boolean {
+  const s = shiftOf(m);
+  return s.kills !== 0 || s.hsKills !== 0 || s.deaths !== 0 || s.dmg !== 0;
+}
+
 /** The measures under "You": the moved counts applied, every other measure as it was. */
 export function youMeasures(m: Measures): Measures {
   const s = shiftOf(m);

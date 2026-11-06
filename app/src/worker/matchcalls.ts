@@ -6,7 +6,7 @@ import { addBests, awardsOf, groupSessions, SESSION_GAP_H, type Best } from "../
 import type { MatchFacts } from "../stats/facts";
 import { rating3Of } from "../stats/rating3";
 import { rollup, type Summary } from "../stats/rollup";
-import { YOU_MOVES, youMeasures, youSummary } from "../stats/takeover";
+import { moved, YOU_MOVES, youMeasures, youSummary } from "../stats/takeover";
 import { matchWon } from "../stats/trends";
 import { startMs } from "../ui/data/match";
 import type { ClutchRow, HighlightRow, MomentRow, MultiKillRow, Query, Session } from "./protocol";
@@ -26,13 +26,18 @@ export function matchCalls(each: EachMatch, summary: (q: Query) => Promise<Summa
       await each(q.files, (f, file) => {
         const s = rollup([f], q.filter);
         addBests(acc, file, s);
-        addBests(you, file, youSummary(s));
+        // the "You" pass over the bests it moves, in matches where a takeover moved something; a match
+        // without one still competes under "You" with its game figures
+        addBests(you, file, moved(s.m) ? youSummary(s) : s, YOU_MOVES);
       });
-      return Object.values(acc).map((b) => {
+      const out: Best[] = Object.values(acc).map((b) => {
         // only where "You" changes the best: its value, or the match it was set in
         const y = YOU_MOVES.has(b.id) ? you[b.id] : undefined;
         return y && (y.value !== b.value || y.file !== b.file) ? { ...b, you: { value: y.value, file: y.file } } : b;
       });
+      // a best that exists only under "You" (no game figure qualified, a takeover's did)
+      for (const y of Object.values(you)) if (!acc[y.id]) out.push({ ...y, you: { value: y.value, file: y.file }, onlyYou: true });
+      return out;
     },
     async sessions(q: Query, gapHours = SESSION_GAP_H): Promise<Session[]> {
       const me = ids(q.filter.player);

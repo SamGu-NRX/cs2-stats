@@ -157,27 +157,35 @@ describe("session chips west of UTC", () => {
 });
 
 describe("session chips under the takeover credit", () => {
-  it("show a session's K-D with the takeover play under You, marked, with the game's K-D in the line's tooltip", async () => {
-    // the worker answers both credits (matchcalls.ts sessions: Session.you); here "You" adds 3 kills
-    // and 1 death. Fails if the chip keeps the game's K-D under You, loses it under Bot, or leaves the
-    // credited figures unmarked
+  it("show a session's K-D and most kills with the takeover play under You, said on the focused chip", async () => {
+    // the worker answers both credits (matchcalls.ts sessions: Session.you); here "You" adds 3 kills,
+    // 1 death and 3 to the most kills. Fails if the chip keeps the game's figures under You, if the
+    // game's K-D and most kills are not said on the button a keyboard reaches (its tooltip and its name),
+    // or if the credited figures are unmarked
     act(() => { setCredit("bot"); });
     render();
     for (const args of asked) {
       const ss = await calls.sessions(...(args as [Query, number?]));
-      sessionsBy.set(JSON.stringify(args), ss.map((x) => ({ ...x, you: { kills: x.kills + 3, deaths: x.deaths + 1, mostKills: x.awards.mostKills } })));
+      sessionsBy.set(JSON.stringify(args), ss.map((x) => ({ ...x, you: { kills: x.kills + 3, deaths: x.deaths + 1, mostKills: x.awards.mostKills && { ...x.awards.mostKills, kills: x.awards.mostKills.kills + 3 } } })));
     }
     render();
-    const sub = () => host.querySelector(".sess__sub")!;
-    const kd = () => /(\d+)–(\d+)/.exec(sub().textContent ?? "")!.slice(1).map(Number);
-    const [k, d] = kd();
-    expect(sub().querySelectorAll(".moved--on")).toHaveLength(0);
+    // a chip with several matches, so it shows its most kills
+    const chip = () => [...host.querySelectorAll<HTMLButtonElement>(".sess")].find((b) => b.querySelector(".sess__awards"))!;
+    const kd = () => /(\d+)–(\d+)/.exec(chip().querySelector(".sess__sub")!.textContent ?? "")!.slice(1).map(Number);
+    const mostKills = () => Number(/Most kills\s*(\d+)/.exec(chip().querySelector(".sess__awards")!.textContent ?? "")![1]);
+    const [k, d] = kd(), most = mostKills();
+    expect([chip().getAttribute("data-tip"), chip().querySelectorAll(".moved--on").length]).toEqual([null, 0]);
     try {
       act(() => { setCredit("you"); });
       render();
-      expect(kd()).toEqual([k + 3, d + 1]);
-      expect(sub().querySelectorAll(".moved--on")).toHaveLength(2);
-      expect(sub().getAttribute("data-tip")).toBe(`Includes your play in bots you took over; the game's K–D is ${k}–${d}.`);
+      expect([...kd(), mostKills()]).toEqual([k + 3, d + 1, most + 3]);
+      expect(chip().querySelectorAll(".moved--on")).toHaveLength(3);
+      act(() => chip().focus());
+      expect(document.activeElement).toBe(chip());
+      const said = `Includes your play in bots you took over. The game's K–D is ${k}–${d}, and its most kills is ${most}.`;
+      expect(chip().getAttribute("data-tip")).toBe(said);
+      expect(chip().getAttribute("aria-label")).toContain(`K–D ${k + 3}–${d + 1}, most kills ${most + 3}. ${said}`);
+      expect(chip().querySelector("[data-tip]")).toBeNull();
     } finally {
       act(() => { setCredit("bot"); });
     }

@@ -2,7 +2,8 @@
 // he dies is credited to the bot, as the game's round stats do, and counted once more on both, so the
 // views' switch (ui/data/credit.ts) can move it to him. A synthetic one-round plugin file: the human (H)
 // and two bots (A, B) are CT, two enemy bots (E1, E2) are T. Every hit does 20.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { METRICS } from "./metrics";
 import { metricDeltas } from "./career";
 import { deriveBase } from "./derive";
 import { emptyMeasures, type Measures as AllMeasures } from "./facts";
@@ -95,6 +96,17 @@ describe("takeover measures", () => {
     expect(measures(m)).toEqual({ H: { deaths: 1 }, A: {}, B: {}, E1: { kills: 1, deaths: 1 }, E2: {} });
   });
 
+  it("credit the driver with a kill made in a body that has no row that round, and no body loses it", () => {
+    // A has no side this round, so no round row and no enemy kill of its own. H dies at 1150, takes A
+    // over, and kills E1 with it at 1600, a headshot. Fails if the kill is left uncredited under "You"
+    // for want of A's row, or is counted as an enemy kill on its sideless body
+    const m = round([[1150, E1, H, null, null], [1600, H, E1, A, null, true]], [[1500, H, E2]]);
+    m.rounds.side = [[3, null, 3, 2, 2]];
+    const got = measures(m);
+    expect(got.H).toEqual({ deaths: 1, takeoverKills: 1, takeoverHsKills: 1, takeoverDmg: 20 });
+    expect(got.A).toBeUndefined();
+  });
+
   it("are zero when the tables do not record controllers, as an extractor demo's do not", () => {
     // fails if a missing controller column is read as a takeover by someone
     const p = pluginToTables(round([[1150, E1, H, null, null], [1400, E2, H, null, A], [1600, H, E1, B, null]], [[1300, H, E2]]));
@@ -129,5 +141,24 @@ describe("a player's own comparisons under the takeover credit", () => {
     // fails if the match card's row loses its "You" figures or keeps them under the delta's names
     const adr = yourMatch(now, before).find((r) => r.id === "adr")!;
     expect([adr.average, adr.you]).toEqual([80, { value: 80, average: 80, delta: 0, direction: "same" }]);
+  });
+});
+
+describe("the takeover pass over a player's comparisons", () => {
+  it("evaluates only the metrics the credit moves, and nothing without a takeover", () => {
+    // fails if the "You" pass reads KAST (no takeover moves it) or runs at all without takeover play:
+    // KAST is read once per summary in the game's pass, so twice in all
+    const sum = (m: Partial<AllMeasures>) => ({ ...emptySummary(), m: { ...emptyMeasures(), ...m } });
+    const kast = METRICS.find((x) => x.id === "kast")!;
+    const spy = vi.spyOn(kast, "value");
+    try {
+      metricDeltas(sum({ rounds: 10, kills: 5 }), sum({ rounds: 10, kills: 6 }));
+      expect(spy).toHaveBeenCalledTimes(2);
+      spy.mockClear();
+      metricDeltas(sum({ rounds: 10, kills: 5, takeoverKills: 2 }), sum({ rounds: 10, kills: 6 }));
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -203,10 +203,15 @@ export function RecordsCard({ q, list }: { q: Query; list: MatchEntry[] }) {
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   // under "You", the bests the takeover credit moves come from the credited summaries (data/credit.ts creditedBest)
   const credit = useCredit();
-  const recs = useMemo(() => (r.data ? recordsOf(r.data.map((b) => creditedBest(b, credit))) : null), [r.data, credit]);
-  const shown = (b: Best & { game: Best }) => <MovedValue game={b.game.value} you={b.game.you?.value ?? b.game.value} text={(x) => bestText({ ...b, value: x })} quiet />;
+  // a best that exists only under "You" (career.ts Best.onlyYou) is left out under "Bot"
+  const recs = useMemo(() => (r.data ? recordsOf(r.data.filter((b) => credit === "you" || !b.onlyYou).map((b) => creditedBest(b, credit))) : null), [r.data, credit]);
+  const shown = (b: Best & { game: Best }) => (b.game.onlyYou
+    ? <span className="moved moved--on">{bestText(b)}</span>
+    : <MovedValue game={b.game.value} you={b.game.you?.value ?? b.game.value} text={(x) => bestText({ ...b, value: x })} quiet />);
   // the record is a link, so what moved is said in its tooltip rather than by a mark of its own
-  const movedTip = (b: Best & { game: Best }) => (credit === "you" && b.value !== b.game.value ? `Includes your play in bots you took over; the game's record is ${bestText(b.game)}.` : null);
+  const movedTip = (b: Best & { game: Best }) => (credit !== "you" ? null
+    : b.game.onlyYou ? "Only with your play in bots you took over: the game's count sets no record for this."
+    : b.value !== b.game.value ? `Includes your play in bots you took over; the game's record is ${bestText(b.game)}.` : null);
   return (
     <Card title="Records" tip="Your best single match for each stat. Rates need a match of 10 rounds or more."
       aside={recs ? <span className="meta">{plural(recs.lead.length + recs.rest.length, "record")}</span> : undefined}>

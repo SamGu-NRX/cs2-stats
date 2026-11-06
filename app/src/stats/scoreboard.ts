@@ -104,27 +104,35 @@ export function scoreboard(c: Ctx): void {
  * The kills, headshot kills, deaths and enemy damage a human made in a bot's body (a takeover), which
  * the counts above credit to the bot, as the game's round stats do. Each is counted once more on both
  * players, takeover* on the driver and driven* on the body, so a view can move it to the driver
- * without deriving again (ui/data/credit.ts). It moves only between two players with a row this round,
- * so moving it leaves every team total as it was.
+ * without deriving again (ui/data/credit.ts). The driver must have a row this round to be credited. A
+ * body without one (no side that round) was credited nothing, so the driver gains the play and no row
+ * loses it; with both rows, moving it leaves every team total as it was.
  */
 function takeovers(c: Ctx, ri: number, list: KillFact[], dmgRows: number[]): void {
   const row = c.pr[ri];
-  const move = (driver: number | null, body: number | null, f: (to: Measures, from: Measures) => void) => {
+  /** `gain` on the driver's measures, `lose` on the body's when it has a row */
+  const move = (driver: number | null, body: number | null, gain: (m: Measures) => void, lose: (m: Measures) => void) => {
     const to = driver === null ? null : row[driver];
     const from = body === null ? null : row[body];
-    if (to && from && to !== from) f(to.m, from.m);
+    if (!to || to === from) return;
+    gain(to.m);
+    if (from) lose(from.m);
   };
   for (const k of list) {
-    if (k.enemy) move(k.killerController, k.killer, (to, from) => {
-      to.takeoverKills++;
-      from.drivenKills++;
-      if (k.headshot) { to.takeoverHsKills++; from.drivenHsKills++; }
-    });
-    move(k.victimController, k.victim, (to, from) => { to.takeoverDeaths++; from.drivenDeaths++; });
+    const driver = k.killerController;
+    // a body with no side that round makes no enemy kill of its own; for its driver the kill is an
+    // enemy kill when the victim is on the driver's other side
+    const driverSide = driver === null ? null : c.side[ri][driver];
+    const enemy = k.enemy || (k.killer !== null && k.killerSide === null && driverSide !== null && k.victimSide !== null && driverSide !== k.victimSide && k.victim !== driver);
+    if (enemy) move(driver, k.killer, (m) => { m.takeoverKills++; if (k.headshot) m.takeoverHsKills++; }, (m) => { m.drivenKills++; if (k.headshot) m.drivenHsKills++; });
+    move(k.victimController, k.victim, (m) => { m.takeoverDeaths++; }, (m) => { m.drivenDeaths++; });
   }
   const d = c.t.damages;
   for (const i of dmgRows) {
+    const driver = c.idOf(d.attacker_controller_steamid[i]);
+    // a sideless body's hit is not a team hit by its own measure; for its driver, a hit on his own side is
+    if (!d.a_side[i] && driver !== null && d.v_side[i] === c.side[ri][driver]) continue;
     const x = hitDamage(c.t, i);
-    move(c.idOf(d.attacker_controller_steamid[i]), c.idOf(d.attacker_steamid[i]), (to, from) => { to.takeoverDmg += x; from.drivenDmg += x; });
+    move(driver, c.idOf(d.attacker_steamid[i]), (m) => { m.takeoverDmg += x; }, (m) => { m.drivenDmg += x; });
   }
 }

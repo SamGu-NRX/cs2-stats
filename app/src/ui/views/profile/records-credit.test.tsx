@@ -46,4 +46,19 @@ describe("Records under the takeover credit", () => {
     expect(tile("Kills").tip).toContain("Includes your play in bots you took over; the game's record is 10.");
     expect(tile("Damage")).toMatchObject({ value: "2400", href: matchHref("a"), marked: false });
   });
+
+  it("shows a record that exists only under You, under You alone, marked and explained", () => {
+    // a headshot share set only by takeover kills (matchcalls.ts: Best.onlyYou). Fails if it shows under
+    // Bot, is missing under You, or reads as an ordinary record
+    bests = [{ id: "kills", value: 10, file: "a" }, { id: "hs", value: 50, file: "b", you: { value: 50, file: "b" }, onlyYou: true }];
+    act(() => { setCredit("bot"); root.render(<RecordsCard q={Q} list={[]} />); });
+    const hsRecord = () => [...host.querySelectorAll("a.rec, a.recs__row")].find((a) => /Headshot kills/.test(a.textContent ?? "") && /50/.test(a.textContent ?? ""));
+    act(() => { (host.querySelector(".recs__more") as HTMLButtonElement | null)?.click(); });
+    expect(hsRecord()).toBeUndefined();
+    act(() => { setCredit("you"); });
+    act(() => { if (!hsRecord()) (host.querySelector(".recs__more") as HTMLButtonElement | null)?.click(); });
+    const a = hsRecord()!;
+    expect([a.getAttribute("href"), !!a.querySelector(".moved--on")]).toEqual([matchHref("b"), true]);
+    expect(a.getAttribute("data-tip")).toContain("Only with your play in bots you took over: the game's count sets no record for this.");
+  });
 });

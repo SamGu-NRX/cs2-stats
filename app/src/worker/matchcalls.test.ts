@@ -1,6 +1,7 @@
 // The worker's per-match calls (matchcalls.ts) on hand-built one-round matches, streamed the way the
 // worker streams them: each match with its own file.
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { METRICS } from "../stats/metrics";
 import type { MatchFacts, Measures } from "../stats/facts";
 import { rollup } from "../stats/rollup";
 import { FREEZE_END, oneRound } from "../stats/testing/match";
@@ -80,4 +81,30 @@ it("ranks moments across matches and within each, and names each clip by match, 
   expect(rows.map((r) => [r.file, r.kinds.join(" "), r.matchRank, r.round])).toEqual([["a.json", "3k clutch opening", 1, 1], ["b.json", "clutch opening", 1, 1]]);
   expect(rows[0].id).toMatch(/^c-[0-9a-f]{16}-r1$/);
   expect(rows[0].id).not.toBe(rows[1].id);
+});
+
+it("keeps a best that exists only under the takeover credit, flagged for You alone", async () => {
+  // twelve rounds with no kill of his own, and 20 kills (10 headshots) made in a bots' body: under the
+  // game's credit there is no headshot share to rank, under "You" it is 50%. Fails if that best is
+  // dropped because the game's pass had none
+  const a = tookOver(match(0, "2026-10-24T20:00:00Z"), "a", { rounds: 12, takeoverKills: 20, takeoverHsKills: 10 });
+  const hs = (await callsOver({ "a.json": a }).personalBests({ files: ["a.json"], filter: { player: "a" } })).find((b) => b.id === "hs");
+  expect(hs).toEqual({ id: "hs", value: 50, file: "a.json", you: { value: 50, file: "a.json" }, onlyYou: true });
+});
+
+it("reads only the bests the takeover credit moves in its pass, and none without a takeover", async () => {
+  // fails if the "You" pass evaluates every metric again (KAST, which no takeover moves, once more per
+  // match), or runs over a match with no takeover play
+  const kast = METRICS.find((m) => m.id === "kast")!;
+  const spy = vi.spyOn(kast, "value");
+  try {
+    const plain = { ...match(1, "2026-10-24T20:00:00Z"), pr: match(1, "2026-10-24T20:00:00Z").pr.map((r) => ({ ...r, m: { ...r.m, rounds: 12 } })) };
+    await callsOver({ "a.json": plain }).personalBests({ files: ["a.json"], filter: { player: "a" } });
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockClear();
+    await callsOver({ "a.json": tookOver(plain, "a", { takeoverKills: 2 }) }).personalBests({ files: ["a.json"], filter: { player: "a" } });
+    expect(spy).toHaveBeenCalledTimes(1);
+  } finally {
+    spy.mockRestore();
+  }
 });

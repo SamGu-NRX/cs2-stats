@@ -81,24 +81,16 @@ export type CreditedLine = StatLine & {
   game: StatLine;
   /** what "you" moves on this line, whichever credit is chosen; null when it moves nothing */
   shift: Shift | null;
-  /** the line differs from the game's: "you" is chosen and something moved */
+  /** the figures whose value under "you" differs from the game's, whichever credit is chosen */
+  changed: ReadonlySet<CreditField>;
+  /** "you" is chosen and some figure differs from the game's */
   moved: boolean;
 };
 
 /** The figures of a stat line the credit can change. */
 export type CreditField = "kills" | "deaths" | "diff" | "adr" | "hs" | "kpr" | "dpr";
-
-/** Whether a shift changes a figure of the line. */
-export function shifts(s: Shift | null, f: CreditField): boolean {
-  if (!s) return false;
-  switch (f) {
-    case "kills": case "kpr": return s.kills !== 0;
-    case "deaths": case "dpr": return s.deaths !== 0;
-    case "diff": return s.kills !== s.deaths;
-    case "adr": return s.dmg !== 0;
-    case "hs": return s.kills !== 0 || s.hsKills !== 0;
-  }
-}
+const FIELDS: readonly CreditField[] = ["kills", "deaths", "diff", "adr", "hs", "kpr", "dpr"];
+const NONE: ReadonlySet<CreditField> = new Set();
 
 /**
  * A rate's denominator in the game's measures. Each of these rates is null only when it is 0
@@ -110,26 +102,36 @@ const OVER: Record<"adr" | "kpr" | "dpr" | "hs", (m: Measures) => number> = { ad
 /** The line hides this rate (see OVER): "You" leaves it hidden. */
 const hidden = (l: StatLine, f: keyof typeof OVER) => l[f] === null && OVER[f](l.m) !== 0;
 
-/** Whether "You" changes a figure the line shows: a shift moves it, and the line does not hide it. */
-export function moves(l: CreditedLine, f: CreditField): boolean {
-  return shifts(l.shift, f) && !(f in OVER && hidden(l.game, f as keyof typeof OVER));
-}
+/**
+ * Whether "You" changes a figure the line shows: its value under "you" differs from the game's. A
+ * shift can leave a figure as it was (a kill and a death cancel in +/-, a takeover's headshot share
+ * can equal the game's), and a rate the line hides stays hidden; neither is marked.
+ */
+export const moves = (l: CreditedLine, f: CreditField): boolean => l.changed.has(f);
+
+/** Two figures that read the same: both missing, or equal past floating-point noise. */
+const same = (a: number | null, b: number | null) => (a === null || b === null ? a === b : Math.abs(a - b) < 1e-9);
 
 /**
  * The line as `c` credits it. Under "bot" it is the line as derived. Under "you" the moved counts are
  * applied to the measures and to the rates read from them (the same ratios as stats/metrics.ts kpr,
  * dpr, adr and hs), except a rate the line hides, which stays hidden; every other value is the game's.
+ * Either way the line says which figures "you" changes (`changed`), so a view can mark them, and
+ * fade them when the switch flips back.
  */
 export function credited(l: StatLine, c: Credit): CreditedLine {
   const s = shiftOf(l.m);
   const shift = s.kills || s.hsKills || s.deaths || s.dmg ? s : null;
-  if (c === "bot" || !shift) return { ...l, game: l, shift, moved: false };
+  if (!shift) return { ...l, game: l, shift, changed: NONE, moved: false };
   const m = youMeasures(l.m);
   const rate = (f: keyof typeof OVER, num: number, scale = 1) => (hidden(l, f) || !OVER[f](m) ? null : (scale * num) / OVER[f](m));
   const adr = rate("adr", m.dmg), kpr = rate("kpr", m.kills), dpr = rate("dpr", m.deaths), hs = rate("hs", m.hsKills, 100);
+  const you: Record<CreditField, number | null> = { kills: m.kills, deaths: m.deaths, diff: m.kills - m.deaths, adr, hs, kpr, dpr };
+  const changed: ReadonlySet<CreditField> = new Set(FIELDS.filter((f) => !same(you[f], l[f])));
+  if (c === "bot") return { ...l, game: l, shift, changed, moved: false };
   return {
     ...l, m, v: { ...l.v, adr, kpr, dpr, hs }, kills: m.kills, deaths: m.deaths, diff: m.kills - m.deaths, adr, kpr, dpr, hs,
-    game: l, shift, moved: true,
+    game: l, shift, changed, moved: changed.size > 0,
   };
 }
 

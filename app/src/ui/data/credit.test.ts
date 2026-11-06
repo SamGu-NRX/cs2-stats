@@ -81,6 +81,17 @@ describe("credited", () => {
     expect([c.hs, moves(c, "hs")]).toEqual([50, true]);
   });
 
+  it("marks only the figures whose value changes, not every figure a shift touches", () => {
+    // 4 kills (2 headshots) of his own and, in a bot's body, 2 kills (1 a headshot) and 2 deaths: HS%
+    // is 50% either way, and +/- is the same. Fails if HS% or +/- is marked as moved (CodeRabbit,
+    // Home.tsx: the tile showed "game's count" beside an unchanged HS%)
+    const l = credited(line({ kills: 4, hsKills: 2, deaths: 5, dmg: 500, takeoverKills: 2, takeoverHsKills: 1, takeoverDeaths: 2 }), "you");
+    expect([l.hs, l.game.hs]).toEqual([50, 50]);
+    expect((["kills", "deaths", "diff", "hs", "kpr", "dpr", "adr"] as const).filter((f) => moves(l, f))).toEqual(["kills", "deaths", "kpr", "dpr"]);
+    // under Bot the line says the same, so a flip back can fade exactly these
+    expect([...credited(line({ kills: 4, hsKills: 2, deaths: 5, dmg: 500, takeoverKills: 2, takeoverHsKills: 1, takeoverDeaths: 2 }), "bot").changed].sort()).toEqual(["deaths", "dpr", "kills", "kpr"]);
+  });
+
   it("reads absent measures, as cached facts leave zeros out, as none", () => {
     // fails if a missing measure is read as NaN
     expect(shiftOf({ takeoverKills: 1 })).toEqual({ kills: 1, hsKills: 0, deaths: 0, dmg: 0 });
