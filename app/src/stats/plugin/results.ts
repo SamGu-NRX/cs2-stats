@@ -5,7 +5,8 @@
 // files also hold result codes the plugin did not know (recon.unknownResult). rounds.score[i] is the
 // [T, CT] score at the start of round i, so the next round's score says who won round i. Scores follow
 // the side and swap at half time and at each overtime half, so both are mapped to the human's team
-// through the human's side in each round. Plugin 1.3.0 fills those rounds from the round_end event,
+// through the side that team played in each round, read from the human or, when he has no side in a
+// round (not connected), from a teammate who has one in every round compared. Plugin 1.3.0 fills those rounds from the round_end event,
 // so in its files this rebuilds only what both sources left null (recon.unknownResult).
 import { KILL_FLAG, type MatchFile, type RoundHow, type Side } from "./schema";
 
@@ -14,25 +15,39 @@ const other = (s: Side): Side => (s === 2 ? 3 : 2);
 const count = (x: number | null | undefined): x is number => Number.isInteger(x) && x! >= 0;
 
 /**
- * [human's team, other team] score at the start of round ri; null when the human has no side or
- * either part of the score is missing, so a missing part is never read as 0.
+ * The side the human's team played in each of `rounds`, read from one player of that team (by starting
+ * side, which fixes the team) who has a side in all of them, the human first; null when none has.
  */
-function teamScore(m: MatchFile, ri: number): [number, number] | null {
-  const side = m.rounds.side[ri]?.[m.human] ?? null;
+function teamSides(m: MatchFile, rounds: number[]): Side[] | null {
+  const start = m.players.startSide[m.human];
+  const team = [m.human, ...m.players.startSide.flatMap((s, pi) => (s === start && pi !== m.human ? [pi] : []))];
+  for (const pi of team) {
+    const sides = rounds.map((ri) => m.rounds.side[ri]?.[pi] ?? null);
+    if (sides.every((x) => x !== null)) return sides as Side[];
+  }
+  return null;
+}
+
+/**
+ * [human's team, other team] score at the start of round ri, given the side his team played; null
+ * when either part of the score is missing, so a missing part is never read as 0.
+ */
+function teamScore(m: MatchFile, ri: number, side: Side): [number, number] | null {
   const s = m.rounds.score[ri];
-  if (side === null || !s || !count(s[0]) || !count(s[1])) return null;
+  if (!s || !count(s[0]) || !count(s[1])) return null;
   const [t, ct] = s;
   return side === 2 ? [t, ct] : [ct, t];
 }
 
 /** Round ri's winner from the score change to round ri + 1: the side whose team's score rose by exactly one while the other's stayed. */
 function fromScores(m: MatchFile, ri: number): Side | null {
-  const side = m.rounds.side[ri]?.[m.human] ?? null;
-  const a = teamScore(m, ri);
-  const b = teamScore(m, ri + 1);
-  if (side === null || !a || !b) return null;
-  if (b[0] - a[0] === 1 && b[1] === a[1]) return side;
-  if (b[1] - a[1] === 1 && b[0] === a[0]) return other(side);
+  const sides = teamSides(m, [ri, ri + 1]);
+  if (!sides) return null;
+  const a = teamScore(m, ri, sides[0]);
+  const b = teamScore(m, ri + 1, sides[1]);
+  if (!a || !b) return null;
+  if (b[0] - a[0] === 1 && b[1] === a[1]) return sides[0];
+  if (b[1] - a[1] === 1 && b[0] === a[0]) return other(sides[0]);
   return null;
 }
 
@@ -45,9 +60,10 @@ function fromScores(m: MatchFile, ri: number): Side | null {
  */
 function finalWinner(m: MatchFile): Side | null {
   const ri = m.rounds.winSide.length - 1;
-  const side = m.rounds.side[ri]?.[m.human] ?? null;
-  const s = teamScore(m, ri);
-  if (m.status !== "complete" || ri < 0 || side === null || !s || s[0] === s[1]) return null;
+  if (m.status !== "complete" || ri < 0) return null;
+  const side = teamSides(m, [ri])?.[0] ?? null;
+  const s = side === null ? null : teamScore(m, ri, side);
+  if (side === null || !s || s[0] === s[1]) return null;
   const max = m.env.maxrounds;
   const overtime = max !== null && max > 0 && ri + 1 > max;
   if (!overtime && Math.abs(s[0] - s[1]) === 1) return null;
@@ -59,12 +75,13 @@ function finalWinner(m: MatchFile): Side | null {
  * record does not settle it.
  *
  * A defuser means a defuse. Otherwise each player of the losing side who was alive at freeze end
- * (rounds.alive0) is:
+ * (rounds.alive0 = 1; a loser whose alive0 is missing leaves the reason null) is:
  * - survived, when rounds.equipEnd is above 0: the plugin writes the pawn's equipment value at
  *   round_end if it is alive, 0 if it is dead;
  * - dead, when the file records his death by body (kills.vBody, so a bot a human drove dies as
- *   itself) or his disconnect (leaves) at or before the end tick. Later removals are ignored: the
- *   bomb's blast kills CTs after round_end, and a player may leave after the round;
+ *   itself) at or before the end tick, or his disconnect (leaves) after freeze end and at or before
+ *   the end tick. Later removals are ignored: the bomb's blast kills CTs after round_end, and a player
+ *   may leave after the round. A disconnect before freeze end is already in alive0;
  * - unknown otherwise, since equipEnd 0 without a recorded death may be a live player carrying
  *   nothing.
  *
@@ -95,8 +112,10 @@ export function howFromEvidence(m: MatchFile, ri: number, win: Side): RoundHow |
     if (K.ri[i] === ri && (K.flags[i] & KILL_FLAG.freeze) === 0 && K.tick[i] <= end) dead.add(K.vBody?.[i] ?? K.victim[i]);
   }
   const L = m.leaves;
-  for (let i = 0; i < (L?.ri.length ?? 0); i++) if (L!.ri[i] === ri && L!.tick[i] <= end) dead.add(L!.pi[i]);
-  const losers = R.side[ri].flatMap((s, pi) => (s === other(win) && R.alive0?.[ri]?.[pi] !== 0 ? [pi] : []));
+  for (let i = 0; i < (L?.ri.length ?? 0); i++) if (L!.ri[i] === ri && L!.tick[i] > fe && L!.tick[i] <= end) dead.add(L!.pi[i]);
+  const onSide = R.side[ri].flatMap((s, pi) => (s === other(win) ? [pi] : []));
+  if (onSide.some((pi) => (R.alive0?.[ri]?.[pi] ?? null) === null)) return null;
+  const losers = onSide.filter((pi) => R.alive0![ri][pi] === 1);
   if (!losers.length) return null;
   let survivors = 0;
   for (const p of losers) {

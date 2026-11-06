@@ -12,8 +12,9 @@ type Kill = [tick: number, killer: number, victim: number, kBody: number | null,
 type Hit = [tick: number, attacker: number, victim: number, nade?: number];
 
 /**
- * One round from tick 1000 to 5000. The human throws an HE at 1100 that detonates at 1200 (grenades
- * row 0, throws row 0); `extra` adds rows to the base. Kills and hits are listed per test.
+ * One round from tick 1000 to 5000, every player alive at freeze end. The human throws an HE at 1100
+ * that detonates at 1200 (grenades row 0, throws row 0); `extra` adds rows to the base. Kills and hits
+ * are listed per test.
  */
 function round(kills: Kill[], hits: Hit[], extra: Partial<MatchFile> = {}): MatchFile {
   const none = { ri: [], tick: [] };
@@ -26,6 +27,7 @@ function round(kills: Kill[], hits: Hit[], extra: Partial<MatchFile> = {}): Matc
     rounds: {
       winSide: [2], how: ["elim"], freezeTick: [1000], durTicks: [4000], bombSite: [null], plantTick: [null], planter: [null],
       defuser: [null], ctSetup: [null], score: [[0, 0]], side: [[3, 3, 3, 2, 2]], equip: [[4000, 4000, 4000, 4000, 4000]], money: [[800, 800, 800, 800, 800]],
+      alive0: [[1, 1, 1, 1, 1]],
     },
     kills: {
       ri: z(kills, 0), tick: kills.map((k) => k[0]), killer: kills.map((k) => k[1]), victim: kills.map((k) => k[2]), assister: z(kills, null),
@@ -73,6 +75,30 @@ describe("rows made in a bot's body", () => {
     expect(hits(m)).toEqual(["1210 H>E1"]);
     const t = pluginToTables(m);
     expect([t.grenade_throws!.steamid, t.grenade_events!.steamid].map((c) => c.map((x) => NAME[x!]))).toEqual([["H"], ["H"]]);
+  });
+
+  it("count a grenade with a bad throw link as unlinked, keeping its detonation with no thrower", () => {
+    // fails if a link out of range, to another round's throw or to another thrower's throw is followed:
+    // each would give the human the HE that detonates at 1200, inside A's takeover before the file names
+    // A (A is first seen dying at 1400). Unlinked, the hit is left out and the detonation has no thrower
+    const linked = (link: Partial<MatchFile>) => {
+      const m = round(TWO, [[1210, H, E1, 0]], link);
+      return [hits(m), pluginToTables(m).grenade_events!.steamid];
+    };
+    const throwRow = { ri: [0], tick: [1100], thrower: [H], type: ["he" as const], pos: [[0, 0, 0] as [number, number, number]] };
+    const he = { ri: [0], tick: [1200], thrower: [H], type: ["he" as const], pos: [[0, 0, 0] as [number, number, number]] };
+    expect(linked({ grenades: { ...he, throw: [5] } })).toEqual([[], [null]]);
+    expect(linked({ throws: { ...throwRow, ri: [1] } })).toEqual([[], [null]]);
+    expect(linked({ throws: { ...throwRow, thrower: [A] } })).toEqual([[], [null]]);
+  });
+
+  it("give an unlinked grenade a bot body only once the file has named that bot", () => {
+    // fails if a detonation tick stands in for the throw inside a takeover that began implicitly: A
+    // starts the tick after the human's death at 1150 but is first named by his kill at 1300, so an
+    // unlinked HE detonating at 1250 is left out, one detonating at 1350 is A's
+    const kills: Kill[] = [[1150, E1, H, null, null], [1300, H, E1, A, null], [1400, E2, H, null, A]];
+    const at = (tick: number) => hits(round(kills, [[tick + 10, H, E2, 0]], { grenades: { ri: [0], tick: [tick], thrower: [H], type: ["he"], pos: [[0, 0, 0]], throw: [null] } }));
+    expect([at(1250), at(1350)]).toEqual([[], [`1360 A>E2`]]);
   });
 
   it("are left out after the last body the kills name, where the file cannot say whose body it was", () => {
@@ -135,6 +161,23 @@ describe("rows made in a bot's body", () => {
     ]);
   });
 
+  it("start a body seen again after another body at its next kills row, not after the other's death", () => {
+    // fails if a reused body's second use starts the tick after B's death and overlaps the gap: own
+    // death 1150, A kills at 1300 and is never seen dying, B kills at 1500 and dies at 1600, A kills
+    // again at 1800. 1450 and 1700 are in no body; B runs 1500..1600; A's second use starts at 1800
+    const kills: Kill[] = [[1150, E1, H, null, null], [1300, H, E1, A, null], [1500, H, E2, B, null], [1600, E2, H, null, B], [1800, H, E2, A, null]];
+    expect(hits(round(kills, [[1300, H, E1], [1450, H, E2], [1550, H, E2], [1600, H, E1], [1700, H, E2], [1800, H, E2]]))).toEqual([
+      "1300 A>E1", "1550 B>E2", "1600 B>E1", "1800 A>E2",
+    ]);
+  });
+
+  it("keep a kill made in no known body, with no attacker, so the victim's death still counts", () => {
+    // fails if the kill row is dropped (E2's death would vanish) or credited to the human, whose own
+    // body died at 1150 and who is named in no bot
+    const t = pluginToTables(round([[1150, E1, H, null, null], [1300, H, E2, null, null]], []));
+    expect([t.kills.attacker_steamid, t.kills.victim_steamid.map((x) => NAME[x])]).toEqual([["BOT_E1", null], ["H", "E2"]]);
+  });
+
   it("stay the human's in a round where he died in his own body more than once (a respawn mode)", () => {
     // fails if the deathmatch-like sessions, where a death respawns the human, lose his damage after his first death
     expect(hits(round([[1150, E1, H, null, null], [1500, E1, H, null, null]], [[1300, H, E2]]))).toEqual(["1300 H>E2"]);
@@ -152,13 +195,37 @@ describe("the takeovers table (plugin 1.3.0)", () => {
     expect(hits({ ...m, takeovers: undefined })).toEqual(["1140 H>E1"]);
   });
 
-  it("reads each row from its tick, so the end row at a body's death tick + 1 keeps a same-tick trade with the body", () => {
-    // fails if a row is applied before its tick (the hit at 1400 would leave A) or the end row is
-    // ignored (the hit at 1410 would stay with A, which is dead); null puts the human back in his own
-    // or no pawn, so that row is his
+  it("reads each row from its tick, and an end row after his own death leaves the human in no body", () => {
+    // fails if a row is applied before its tick (the hit at 1400 would leave A), or the end row at A's
+    // death tick + 1 returns him to his own body, which died at 1150: the hit at 1410 is left out
     const kills: Kill[] = [[1150, E1, H, null, null], [1400, E2, H, null, A]];
     const m = round(kills, [[1300, H, E2], [1400, H, E2], [1410, H, E1]], { takeovers: takeovers([[1151, A], [1401, null]]) });
-    expect(hits(m)).toEqual(["1300 A>E2", "1400 A>E2", "1410 H>E1"]);
+    expect(hits(m)).toEqual(["1300 A>E2", "1400 A>E2"]);
+  });
+
+  it("returns the human to his own body on a null row only while that body is alive", () => {
+    // fails if a null row with no recorded own death leaves him in no body, or his own death is not
+    // applied the tick after it: he drives A from 1200 to 1299, is back in his own body from 1300, and
+    // dies there at 1500
+    const kills: Kill[] = [[1500, E1, H, null, null]];
+    const m = round(kills, [[1250, H, E2], [1350, H, E2], [1500, H, E1], [1501, H, E1]], { takeovers: takeovers([[1200, A], [1300, null]]) });
+    expect(hits(m)).toEqual(["1250 A>E2", "1350 H>E2", "1500 H>E1"]);
+  });
+
+  it("starts a human dead at freeze end in no body", () => {
+    // fails if rounds.alive0 = 0 is ignored on this path: his hit at 1300, before the row naming A, is left out
+    const m = round([], [[1300, H, E2], [1600, H, E2]], { takeovers: takeovers([[1500, A]]) });
+    m.rounds.alive0 = [[0, 1, 1, 1, 1]];
+    expect(hits(m)).toEqual(["1600 A>E2"]);
+  });
+
+  it("gives the bot the human's position row only when the bot has none of its own that second", () => {
+    // fails if a row in A's body repeats A's own row under the human or under A, or is lost when A has
+    // no row: A has a row at 1290, none near 1600
+    const m = round([[1150, E1, H, null, null]], [], { takeovers: takeovers([[1151, A]]) });
+    m.pos = { ri: [0, 0, 0], tick: [1290, 1300, 1600], pi: [A, H, H], x: [1, 2, 3], y: [0, 0, 0], z: [0, 0, 0], place: [null, null, null], alive: [true, true, true] };
+    const t = pluginToTables(m);
+    expect(t.positions!.tick.map((x, i) => `${x} ${NAME[t.positions!.steamid[i]]} ${t.positions!.x[i]}`)).toEqual(["1290 A 1", "1600 A 3"]);
   });
 
   it("falls back to the kills when the plugin dropped takeover rows", () => {
@@ -168,11 +235,16 @@ describe("the takeovers table (plugin 1.3.0)", () => {
     expect(hits(m)).toEqual(["1500 B>E1"]);
   });
 
-  it("rejects a row that names the player's own body or no player", () => {
+  it("rejects a row for another player, a body that is not a bot, or a tick outside the round", () => {
     // fails if a malformed row loads and credits the wrong player
     const bad = (t: Takeovers) => () => validateMatch(round([], [], { takeovers: t }), "t.json.gz");
-    expect(bad(takeovers([[1151, H]]))).toThrow("takeovers.body[0] is 0, expected null or another player's index 0..4");
-    expect(bad({ ...takeovers([[1151, A]]), pi: [9] })).toThrow("takeovers.pi[0] is 9, expected a player index 0..4");
+    expect(bad(takeovers([[1151, A]]))).not.toThrow();
+    expect(bad(takeovers([[1151, H]]))).toThrow("takeovers.body[0] is 0, expected null or a bot's index");
+    expect(bad(takeovers([[1151, 9]]))).toThrow("takeovers.body[0] is 9, expected null or a bot's index");
+    expect(bad({ ...takeovers([[1151, B]]), pi: [A] })).toThrow("takeovers.pi[0] is 1, expected the human's index 0");
+    expect(bad(takeovers([[999, A]]))).toThrow("takeovers.tick[0] is 999, outside round 0's ticks 1000..5001");
+    expect(bad(takeovers([[5001, null]]))).not.toThrow();
+    expect(bad(takeovers([[5002, null]]))).toThrow("takeovers.tick[0] is 5002, outside round 0's ticks 1000..5001");
     expect(bad({ ri: [0], tick: [1], pi: [H] } as unknown as Takeovers)).toThrow('column "takeovers.body" is missing or not an array');
   });
 });

@@ -360,25 +360,38 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
     }
   }
   if (m.throws !== undefined) checkTable(where, m.throws, "throws");
-  if (m.takeovers !== undefined) checkTakeovers(where, m.takeovers, nPlayers, nRounds);
+  if (m.takeovers !== undefined) checkTakeovers(where, m.takeovers, m.players as Players, rounds, human);
   decodePositions(m.pos as Pos);
   const ffr = m.firstFullRound as number;
   if (ffr < 0 || ffr > nRounds) throw new SchemaError(where, `firstFullRound ${ffr} is outside 0..${nRounds}`);
   return raw as MatchFile;
 }
 
-/** Takeover rows must name a round, a tick, a player and another player's body (or null), so a bad row fails here rather than crediting the wrong player. */
-function checkTakeovers(where: string, table: unknown, nPlayers: number, nRounds: number): void {
+/**
+ * Takeover rows must name a round, a tick inside it, the human and a bot's body (or null), so a bad
+ * row fails here rather than crediting the wrong player (SCHEMA.md: only the human takes over a bot).
+ * A round's ticks run from freeze end to its end tick; a body that dies on the end tick ends its
+ * takeover at end + 1. A round with no recorded freeze end or length has no range to check against.
+ */
+function checkTakeovers(where: string, table: unknown, players: Players, rounds: Rounds, human: number): void {
   const n = checkTable(where, table, "takeovers");
   const t = table as Takeovers;
+  const nPlayers = players.key.length;
+  const nRounds = rounds.winSide.length;
   const index = (x: unknown, size: number) => Number.isInteger(x) && (x as number) >= 0 && (x as number) < size;
   for (let i = 0; i < n; i++) {
-    if (!index(t.ri[i], nRounds)) throw new SchemaError(where, `takeovers.ri[${i}] is ${JSON.stringify(t.ri[i])}, expected a round index 0..${nRounds - 1}`);
+    const ri = t.ri[i];
+    if (!index(ri, nRounds)) throw new SchemaError(where, `takeovers.ri[${i}] is ${JSON.stringify(ri)}, expected a round index 0..${nRounds - 1}`);
     if (!Number.isInteger(t.tick[i])) throw new SchemaError(where, `takeovers.tick[${i}] is ${JSON.stringify(t.tick[i])}, expected an integer tick`);
-    if (!index(t.pi[i], nPlayers)) throw new SchemaError(where, `takeovers.pi[${i}] is ${JSON.stringify(t.pi[i])}, expected a player index 0..${nPlayers - 1}`);
+    const fe = rounds.freezeTick[ri];
+    const dur = rounds.durTicks[ri];
+    if (fe !== null && dur !== null && (t.tick[i] < fe || t.tick[i] > fe + dur + 1)) {
+      throw new SchemaError(where, `takeovers.tick[${i}] is ${t.tick[i]}, outside round ${ri}'s ticks ${fe}..${fe + dur + 1}`);
+    }
+    if (t.pi[i] !== human) throw new SchemaError(where, `takeovers.pi[${i}] is ${JSON.stringify(t.pi[i])}, expected the human's index ${human}`);
     const body = t.body[i];
-    if (body !== null && (!index(body, nPlayers) || body === t.pi[i])) {
-      throw new SchemaError(where, `takeovers.body[${i}] is ${JSON.stringify(body)}, expected null or another player's index 0..${nPlayers - 1}`);
+    if (body !== null && (!index(body, nPlayers) || !players.isBot[body])) {
+      throw new SchemaError(where, `takeovers.body[${i}] is ${JSON.stringify(body)}, expected null or a bot's index`);
     }
   }
 }

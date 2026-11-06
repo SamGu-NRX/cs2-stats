@@ -4,12 +4,11 @@
 //
 // The plugin checks each round against CSPerRoundStats_t as it records (recon): recon.mismatch holds
 // the game's value wherever the plugin's tally differed, and every other checked player-round matched
-// that tally. This tool rebuilds the tally from the file's rows as the plugin kept it and uses it as
-// the game's value off the mismatch list. Before plugin 1.3.0 the tally credits the controlling player
-// (plugin/Core/Recorder.cs Kill and Hurt); from 1.3.0 it credits bodies (SCHEMA.md, "Reconciliation
-// basis"). A rebuilt tally that differs from a mismatch row's "ours" is counted and printed, since the
-// comparison then rests on a wrong reconstruction. Rounds where the plugin could not read every player
-// (checkedPlayers < expectedPlayers) are skipped, because the file does not say which players it read.
+// that tally. This tool rebuilds the tally from the file's rows as the plugin kept it (recon-tally.ts)
+// and uses it as the game's value off the mismatch list. A rebuilt tally that differs from a mismatch
+// row's "ours" is counted and printed, since the comparison then rests on a wrong reconstruction.
+// Rounds where the plugin could not read every player are skipped, because the file does not say which
+// players it read (recon-tally.ts coverage).
 //
 // Damage agrees as the plugin's own check does (plugin/Core/Recon.cs): the game's figure may exceed
 // ours by up to one HP per hit. Off the mismatch list the game's figure is known only to lie in
@@ -25,7 +24,7 @@ import { pluginToTables } from "../src/stats/plugin/adapter";
 import { bodyLookup } from "../src/stats/plugin/bodies";
 import { decodeMatch } from "../src/stats/plugin/decode";
 import { checkResultRules } from "../src/stats/plugin/results";
-import type { MatchFile } from "../src/stats/plugin/schema";
+import { coverage, tallies, type Field } from "./recon-tally";
 
 const dir = process.argv[2];
 if (!dir) throw new Error("usage: pnpm takeover-check <folder of .json.gz match files> [--misses]");
@@ -42,57 +41,11 @@ const walk = (d: string) => {
 walk(dir);
 if (!files.length) throw new Error(`${dir}: no .json.gz match files`);
 
-type Field = "k" | "d" | "a" | "dmg";
 const FIELDS: Field[] = ["k", "d", "a", "dmg"];
 const total = Object.fromEntries(FIELDS.map((f) => [f, { ok: 0, bad: 0, listedOk: 0, listed: 0 }])) as Record<Field, { ok: number; bad: number; listedOk: number; listed: number }>;
 const rules = { known: 0, agree: 0, disagree: 0, undecided: 0, finalKnown: 0, finalAgree: 0, finalDisagree: 0, finalUndecided: 0, howKnown: 0, howAgree: 0, howDisagree: 0, howUndecided: 0, recovered: 0, howRecovered: 0 };
 let skippedRounds = 0;
 let badTally = 0;
-
-/** Whether the file's recon tally credits bodies (plugin 1.3.0 on) rather than controllers. */
-function bodyBasis(m: MatchFile): boolean {
-  const v = /^(\d+)\.(\d+)/.exec(m.env.plugin ?? "");
-  return !!v && (Number(v[1]) > 1 || (Number(v[1]) === 1 && Number(v[2]) >= 3));
-}
-
-/** The plugin's recon tally per (ri, pi), rebuilt from the file's rows. */
-function tallies(m: MatchFile) {
-  const basis = bodyBasis(m);
-  const lookup = bodyLookup(m);
-  const body = (pi: number, ri: number, tick: number) => (basis ? lookup(pi, ri, tick) ?? pi : pi);
-  const t = new Map<string, Record<Field | "hits", number>>();
-  const at = (ri: number, pi: number) => {
-    const key = `${ri}:${pi}`;
-    let v = t.get(key);
-    if (!v) t.set(key, (v = { k: 0, d: 0, a: 0, dmg: 0, hits: 0 }));
-    return v;
-  };
-  const enemy = (ri: number, a: number, b: number) => {
-    const sa = m.rounds.side[ri]?.[a], sb = m.rounds.side[ri]?.[b];
-    return sa != null && sb != null && sa !== sb;
-  };
-  const K = m.kills;
-  for (let i = 0; i < K.ri.length; i++) {
-    const ri = K.ri[i], tick = K.tick[i];
-    const v = basis ? K.vBody?.[i] ?? K.victim[i] : K.victim[i];
-    const killer = K.killer[i] === null ? null : basis ? K.kBody?.[i] ?? K.killer[i] : K.killer[i];
-    at(ri, v).d++;
-    if (killer !== null && killer !== v && enemy(ri, killer, v)) at(ri, killer).k++;
-    const as = K.assister[i] ?? K.flashAssister[i];
-    if (as !== null) at(ri, body(as, ri, tick)).a++;
-  }
-  const D = m.damage;
-  for (let i = 0; i < D.ri.length; i++) {
-    if (D.attacker[i] === null) continue;
-    const a = body(D.attacker[i]!, D.ri[i], D.tick[i]);
-    const v = body(D.victim[i], D.ri[i], D.tick[i]);
-    if (a === v || !enemy(D.ri[i], a, v)) continue;
-    const x = at(D.ri[i], a);
-    x.dmg += D.dmg[i];
-    x.hits++;
-  }
-  return (ri: number, pi: number) => t.get(`${ri}:${pi}`) ?? { k: 0, d: 0, a: 0, dmg: 0, hits: 0 };
-}
 
 const fmt = (x: number) => x.toFixed(1);
 for (const file of files.sort()) {
@@ -146,7 +99,7 @@ for (const file of files.sort()) {
   const rr = m.recon?.rounds;
   for (let j = 0; j < (rr?.ri.length ?? 0); j++) {
     const ri = rr!.ri[j];
-    const checked = rr!.checkedPlayers?.[j] ?? 0, expected = rr!.expectedPlayers?.[j] ?? 0;
+    const { checked, expected } = coverage(rr!, j);
     if (!checked) continue;
     if (checked !== expected) { skippedRounds++; continue; }
     m.rounds.side[ri].forEach((side, pi) => {

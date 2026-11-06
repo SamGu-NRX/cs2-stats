@@ -154,6 +154,31 @@ describe("how a rebuilt round ended, from the end state at round_end", () => {
     expect(how(m)).toBe("elim");
   });
 
+  it("stays null when any loser's alive at freeze end is not recorded", () => {
+    // fails if a loser with no alive0 is skipped (as if dead at freeze end), so the others' deaths read
+    // as an elimination
+    const m = round(3, [4000, 4000, 0, 0]);
+    m.kills = kills([[3000, 2]]);
+    expect(how(m)).toBeNull();
+    m.rounds.alive0 = [[1, 1, 1, 0]];
+    expect(how(m)).toBe("elim");
+    m.rounds.alive0 = [[1, 1, 1, null]];
+    expect(how(m)).toBeNull();
+    m.rounds.alive0 = undefined;
+    expect(how(m)).toBeNull();
+  });
+
+  it("counts only a disconnect after freeze end as removing a loser", () => {
+    // fails if a disconnect at or before freeze end counts: alive0 already records who was there at
+    // freeze end, so a leave row at tick 1000 cannot remove t2, who has no equipment and no death
+    const m = round(3, [4000, 4000, 0, 0]);
+    m.kills = kills([[3000, 2]]);
+    m.leaves = { ri: [0], tick: [1000], pi: [3], alive: [1] };
+    expect(how(m)).toBeNull();
+    m.leaves = { ri: [0], tick: [1001], pi: [3], alive: [1] };
+    expect(how(m)).toBe("elim");
+  });
+
   it("keeps a dead T an elimination when he disconnects after the round ends", () => {
     // fails if the later of a death and a disconnect is taken as the removal: t2 dies at 3000 and
     // leaves at 5001, one tick after the end
@@ -206,6 +231,21 @@ describe("how a rebuilt round ended, from the end state at round_end", () => {
     const m = round(3, [4000, 4000, 0, 2700]);
     m.kills = kills([[900, 3, null, 128], [3000, 2]]);
     expect(how(m)).toBe("time");
+  });
+});
+
+describe("scores in a round the human sat out", () => {
+  it("are read through a teammate who played both rounds", () => {
+    // fails if a round whose next round the human missed (not connected, no side) stays unknown when
+    // his team's side is known from a teammate: the human's team is CT and scores 1-0 into round 2
+    const m = file([true, true, true], [3, 3, 3], { maxrounds: 6 });
+    m.players = { ...m.players, key: [...m.players.key, "B:mate"], name: [...m.players.name, "mate"], isBot: [...m.players.isBot, true], startSide: [...m.players.startSide, 3] };
+    m.rounds.side = [[3, 2, 3], [null, 2, 3], [3, 2, 3]];
+    m.rounds.equip = m.rounds.side.map(() => [4000, 4000, 4000]);
+    m.rounds.money = m.rounds.side.map(() => [800, 800, 800]);
+    expect(roundResults(m).winSide.slice(0, 2)).toEqual([3, 3]);
+    m.rounds.side[1] = [null, 2, null];
+    expect(roundResults(m).winSide.slice(0, 2)).toEqual([null, null]);
   });
 });
 
