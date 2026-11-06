@@ -13,7 +13,7 @@ import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
 import { hideFile } from "../data/privacy";
 import { Moved } from "../components/Takeover";
-import { credited, useCredit, type CreditField } from "../data/credit";
+import { credited, moves, useCredit, type CreditField } from "../data/credit";
 import { AgentImg } from "../components/Agent";
 import { attrsOf, clutchRows, unreadOwnFiles, unreadText, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline, type OwnEntry } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
@@ -212,9 +212,12 @@ function Tiles({ list, t }: { list: OwnEntry[]; t: Totals | null }) {
     <div className="tiles" role="list" aria-label="Headline stats">
       {TILES.filter((m) => !m.visibility || visibility).map((m) => {
         const value = tileValue(m, line?.v ?? null, t?.rating.value ?? null);
+        // the verdict reads the game's figure: benchmarks are measured on the game's credit (shared.tsx StatTile judgedBy)
+        const game = tileValue(m, line?.game.v ?? null, t?.rating.value ?? null);
         const series = seriesOf(m, list.slice(0, 10), credit);
         const field = TILE_FIELD[m.id];
         const mark = line && field ? (n: ReactNode) => <Moved l={line} f={field} game={fmtMetric(m.id, line.game.v[m.id] ?? null)}>{n}</Moved> : undefined;
+        const judgedBy = line?.moved && field && moves(line, field) && game !== null ? m.fmt(game) : undefined;
         const noAim = !!m.aim && !aimMatches;
         // the last match against the value over the filter, as the hero compares them; none when either is missing
         const d = noAim ? null : tileDelta(m, list[0] ?? null, value, credit);
@@ -231,7 +234,8 @@ function Tiles({ list, t }: { list: OwnEntry[]; t: Totals | null }) {
             <StatTile
               label={m.label}
               value={noAim || value === null ? "–" : m.fmt(value)}
-              raw={value}
+              raw={game}
+              judgedBy={judgedBy}
               mark={mark}
               bench={m.bench}
               def={metric(m.id).def}

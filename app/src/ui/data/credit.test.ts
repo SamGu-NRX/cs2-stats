@@ -2,7 +2,7 @@
 // the saved choice. The derive side, which counts the moved play, is stats/takeover-credit.test.ts.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyMeasures, type Measures } from "../../stats/facts";
-import { credited, hasTakeover, shiftOf } from "./credit";
+import { credited, creditedBest, creditedRow, hasTakeover, moves, shiftOf } from "./credit";
 import { lineOf } from "./engine";
 
 /** A line over 10 rounds with these measures, and values as the worker gives them. */
@@ -62,6 +62,25 @@ describe("credited", () => {
     expect([c.kills, c.deaths, c.adr, c.kpr, c.dpr, c.hs]).toEqual([1, 1, null, null, null, 0]);
   });
 
+  it("keeps a rate the coverage rule hid hidden, and moves only the rates the line shows", () => {
+    // a thin log's entry keeps its counts and hides every rate (engine.ts coverEntry). Fails if "You"
+    // brings ADR, KPR, DPR or HS% back from its counts, or marks a hidden rate as moved (+/- does not
+    // move here: the takeover adds two kills and two deaths)
+    const thin = { ...YOU, adr: null, kpr: null, dpr: null, hs: null, v: Object.fromEntries(Object.keys(YOU.v).map((k) => [k, null])) };
+    const c = credited(thin, "you");
+    expect([c.kills, c.deaths, c.adr, c.kpr, c.dpr, c.hs, c.v.adr]).toEqual([7, 8, null, null, null, null, null]);
+    expect((["kills", "deaths", "diff", "adr", "kpr", "dpr", "hs"] as const).map((f) => moves(c, f))).toEqual([true, true, false, false, false, false, false]);
+  });
+
+  it("gives a rate that was missing only for want of a denominator once the moved counts give one", () => {
+    // HS% over no kills is not hidden, just undefined: fails if two kills made in a bot's body (one a
+    // headshot) leave it a dash, or if it is not marked as moved
+    const none = line({ kills: 0, hsKills: 0, deaths: 3, dmg: 100, takeoverKills: 2, takeoverHsKills: 1 });
+    expect(none.hs).toBeNull();
+    const c = credited(none, "you");
+    expect([c.hs, moves(c, "hs")]).toEqual([50, true]);
+  });
+
   it("reads absent measures, as cached facts leave zeros out, as none", () => {
     // fails if a missing measure is read as NaN
     expect(shiftOf({ takeoverKills: 1 })).toEqual({ kills: 1, hsKills: 0, deaths: 0, dmg: 0 });
@@ -97,5 +116,26 @@ describe("the saved choice", () => {
     expect(c.creditNow()).toBe("bot");
     expect(c.setCredit("you")).toMatch(/could not be saved/);
     expect(c.creditNow()).toBe("you");
+  });
+});
+
+describe("creditedBest", () => {
+  it("gives the best \"You\" chose under you, and the game's under bot, with the game's beside it", () => {
+    // fails if a record under "You" keeps the game's value or match, or one "You" leaves alone changes
+    const kills = { id: "kills", value: 10, file: "a", you: { value: 14, file: "b" } };
+    expect(creditedBest(kills, "you")).toMatchObject({ value: 14, file: "b", game: kills });
+    expect(creditedBest(kills, "bot")).toMatchObject({ value: 10, file: "a" });
+    expect(creditedBest({ id: "assists", value: 4, file: "a" }, "you")).toMatchObject({ value: 4, file: "a" });
+  });
+});
+
+describe("creditedRow", () => {
+  it("reads a comparison row's figures under You where the worker gave them, and the game's otherwise", () => {
+    // fails if a row keeps the game's figures under You, or one without "You" figures is marked moved
+    const row = { id: "adr", value: 70, before: 80, delta: -10, direction: "worse" as const, you: { value: 80, before: 80, delta: 0, direction: "same" as const } };
+    expect(creditedRow(row, "you")).toMatchObject({ value: 80, delta: 0, direction: "same", moved: true });
+    expect(creditedRow(row, "bot")).toMatchObject({ value: 70, delta: -10, moved: false });
+    const kast: { id: string; value: number; before: number; you?: object } = { id: "kast", value: 70, before: 70 };
+    expect(creditedRow(kast, "you")).toMatchObject({ value: 70, moved: false });
   });
 });

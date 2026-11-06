@@ -3,7 +3,11 @@
 // views' switch (ui/data/credit.ts) can move it to him. A synthetic one-round plugin file: the human (H)
 // and two bots (A, B) are CT, two enemy bots (E1, E2) are T. Every hit does 20.
 import { describe, expect, it } from "vitest";
+import { metricDeltas } from "./career";
 import { deriveBase } from "./derive";
+import { emptyMeasures, type Measures as AllMeasures } from "./facts";
+import { yourMatch } from "./matchviews";
+import { emptySummary } from "./rollup";
 import type { Measure } from "./facts";
 import { pluginToTables } from "./plugin/adapter";
 import { KILL_FLAG, type MatchFile } from "./plugin/schema";
@@ -102,5 +106,28 @@ describe("takeover measures", () => {
     };
     const moved = deriveBase(t).facts.pr.flatMap((r) => SHOWN.slice(4).filter((k) => r.m[k]));
     expect(moved).toEqual([]);
+  });
+});
+
+describe("a player's own comparisons under the takeover credit", () => {
+  const sum = (m: Partial<AllMeasures>) => ({ ...emptySummary(), m: { ...emptyMeasures(), ...m } });
+  // this match: 5 kills, 5 deaths and 700 damage of his own, and in a bot's body 2 kills and 100
+  // damage; before: 6 kills, 4 deaths and 800 damage, no takeover
+  const now = sum({ rounds: 10, kills: 5, deaths: 5, dmg: 700, dmgTaken: 600, takeoverKills: 2, takeoverDmg: 100 });
+  const before = sum({ rounds: 10, kills: 6, deaths: 4, dmg: 800 });
+
+  it("carry the credited figures for the metrics the credit moves, and only those", () => {
+    // fails if ADR or KPR against the earlier figure ignores the takeover play under "You", or a metric
+    // that mixes a moved count with an unmoved one (net damage) or does not move (DPR here) gets one
+    const d = Object.fromEntries(metricDeltas(now, before).map((x) => [x.id, x]));
+    expect([d.adr.value, d.adr.you]).toEqual([70, { value: 80, before: 80, delta: 0, direction: "same" }]);
+    expect(d.kpr.you).toEqual({ value: 0.7, before: 0.6, delta: expect.closeTo(0.1, 9), direction: "better" });
+    expect([d.netDamage.you, d.dpr.you]).toEqual([undefined, undefined]);
+  });
+
+  it("name the earlier figure average in this match against recent ones, under either credit", () => {
+    // fails if the match card's row loses its "You" figures or keeps them under the delta's names
+    const adr = yourMatch(now, before).find((r) => r.id === "adr")!;
+    expect([adr.average, adr.you]).toEqual([80, { value: 80, average: 80, delta: 0, direction: "same" }]);
   });
 });

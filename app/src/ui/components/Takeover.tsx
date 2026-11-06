@@ -1,7 +1,7 @@
 // The takeover credit switch and the mark on every number it changes (data/credit.ts).
 import type { ReactNode } from "react";
 import type { Line } from "../../worker/protocol";
-import { CREDIT_TIP, credited, creditJustChanged, setCredit, shifts, useCredit, type Credit, type CreditField, type CreditedLine } from "../data/credit";
+import { CREDIT_TIP, credited, creditJustChanged, moves, setCredit, useCredit, type Credit, type CreditField, type CreditedLine } from "../data/credit";
 import { lineOf } from "../data/engine";
 import { Segmented } from "./controls";
 import { toast } from "./overlay";
@@ -36,13 +36,31 @@ export function Moved({ l, f, game, quiet = false, children }: {
   quiet?: boolean;
   children: ReactNode;
 }) {
-  const credit = useCredit();
-  if (!shifts(l.shift, f)) return <>{children}</>;
-  const fade = creditJustChanged(400) ? " moved--fade" : "";
   const s = l.shift;
-  if (!l.moved || !s) return <span key={credit} className={`moved${fade}`}>{children}</span>;
   // the user's line gains what a bot's body loses; a line never does both
-  const gained = s.kills + s.deaths + s.dmg > 0;
+  return <Mark changes={moves(l, f)} on={l.moved} gained={!!s && s.kills + s.deaths + s.dmg > 0} f={f} game={game} quiet={quiet}>{children}</Mark>;
+}
+
+/**
+ * One of the user's own figures the worker gives under both credits (a session's kills, a record): the
+ * one the switch chooses, marked like Moved when the two differ. The user's figures only gain by "You".
+ */
+export function MovedValue({ game, you, text, quiet = false }: {
+  game: number; you: number; text: (x: number) => string;
+  /** mark only, inside a link or button, whose own label or tooltip says what moved (no tab stop inside it) */
+  quiet?: boolean;
+}) {
+  const credit = useCredit();
+  return <Mark changes={you !== game} on={credit === "you" && you !== game} gained game={text(game)} quiet={quiet}>{text(credit === "you" ? you : game)}</Mark>;
+}
+
+function Mark({ changes, on, gained, game, f, quiet = false, children }: {
+  changes: boolean; on: boolean; gained: boolean; game: string; f?: CreditField; quiet?: boolean; children: ReactNode;
+}) {
+  const credit = useCredit();
+  if (!changes) return <>{children}</>;
+  const fade = creditJustChanged(400) ? " moved--fade" : "";
+  if (!on) return <span key={credit} className={`moved${fade}`}>{children}</span>;
   if (quiet) return <span key={credit} className={`moved moved--on${fade}`} data-f={f}>{children}</span>;
   const tip = `${gained ? "Includes your play in bots you took over" : "Without your play in this bot's body"}. The game's count: ${game}.`;
   return (

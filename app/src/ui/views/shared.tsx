@@ -25,7 +25,7 @@ import type { FormFilter } from "../lib/form";
 const SPARK_MIN_POINTS = 3;
 
 /** A pooled headline stat; `delta` is the last match against it (Home's tiles). */
-export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdown, def, color, mark }: {
+export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdown, def, color, mark, judgedBy }: {
   label: string;
   value: string;
   /** wraps the value, as the takeover credit's mark does (components/Takeover.tsx Moved) */
@@ -35,7 +35,13 @@ export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdow
   delta?: ReactNode;
   spark?: (number | null)[];
   bench?: BenchId;
+  /** the figure the verdict reads */
   raw?: number | null;
+  /**
+   * The game's figure, when the value shown is the takeover credit's and the verdict reads the game's
+   * (benchmarks are measured on the game's credit): the verdict says so.
+   */
+  judgedBy?: string;
   breakdown?: () => ReactNode;
   def?: string;
   color?: string;
@@ -46,6 +52,9 @@ export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdow
     <>
       <div className="tile__top">
         <span className="stat__l">{label}</span>
+        {bench && judgedBy !== undefined && (
+          <span className="tile__judged meta" data-tip={`The verdict reads the game's count, ${judgedBy}: benchmarks are measured on the game's credit.`} tabIndex={0}>game's count</span>
+        )}
         {bench && <VerdictLabel v={v} />}
       </div>
       <div className="tile__v num" style={color ? { color } : undefined}>{mark ? mark(<Num v={value} />) : <Num v={value} />}</div>

@@ -18,6 +18,7 @@ import { matchCalls } from "../../worker/matchcalls";
 import type { Method, Query, Session } from "../../worker/protocol";
 import { entryOf, metaOf, ratingsOf } from "../../worker/views";
 import { sideQuery } from "../../worker/ranking";
+import { setCredit } from "../data/credit";
 import { careerEntries } from "../data/engine";
 import type { MatchEntry } from "../data/match";
 import { setMeta } from "../data/meta";
@@ -152,5 +153,35 @@ describe("session chips west of UTC", () => {
     render();
     expect(host.querySelector(".sessions .skel")).toBeNull();
     expect(host.querySelector(".sessions .load-failed")?.textContent).toBe("Sessions could not load: the worker stopped");
+  });
+});
+
+describe("session chips under the takeover credit", () => {
+  it("show a session's K-D with the takeover play under You, marked, with the game's K-D in the line's tooltip", async () => {
+    // the worker answers both credits (matchcalls.ts sessions: Session.you); here "You" adds 3 kills
+    // and 1 death. Fails if the chip keeps the game's K-D under You, loses it under Bot, or leaves the
+    // credited figures unmarked
+    act(() => { setCredit("bot"); });
+    render();
+    for (const args of asked) {
+      const ss = await calls.sessions(...(args as [Query, number?]));
+      sessionsBy.set(JSON.stringify(args), ss.map((x) => ({ ...x, you: { kills: x.kills + 3, deaths: x.deaths + 1, mostKills: x.awards.mostKills } })));
+    }
+    render();
+    const sub = () => host.querySelector(".sess__sub")!;
+    const kd = () => /(\d+)–(\d+)/.exec(sub().textContent ?? "")!.slice(1).map(Number);
+    const [k, d] = kd();
+    expect(sub().querySelectorAll(".moved--on")).toHaveLength(0);
+    try {
+      act(() => { setCredit("you"); });
+      render();
+      expect(kd()).toEqual([k + 3, d + 1]);
+      expect(sub().querySelectorAll(".moved--on")).toHaveLength(2);
+      expect(sub().getAttribute("data-tip")).toBe(`Includes your play in bots you took over; the game's K–D is ${k}–${d}.`);
+    } finally {
+      act(() => { setCredit("bot"); });
+    }
+    render();
+    expect(kd()).toEqual([k, d]);
   });
 });

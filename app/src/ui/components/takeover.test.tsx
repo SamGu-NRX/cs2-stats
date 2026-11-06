@@ -38,7 +38,8 @@ const radio = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[r
 const cell = (k: string) => host.querySelector(`[data-${k}] .moved`) ?? host.querySelector(`[data-${k}]`)!;
 
 beforeEach(() => { localStorage.clear(); act(() => { setCredit("bot"); }); });
-afterEach(() => { render(<></>); vi.useRealTimers(); });
+// the choice is saved in localStorage, which outlives this file: leave it as the default
+afterEach(() => { render(<></>); vi.useRealTimers(); act(() => { setCredit("bot"); }); localStorage.clear(); });
 
 describe("TakeoverSwitch", () => {
   it("starts on Bot, the game's credit, with the numbers unmarked", () => {
@@ -75,6 +76,20 @@ describe("TakeoverSwitch", () => {
     expect(cell("k").className).not.toContain("moved--fade");
     act(() => { radio("You").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })); });
     expect([radio("Bot").getAttribute("aria-checked"), cell("k").textContent]).toEqual(["true", "5"]);
+  });
+
+  it("leaves a rate the line hides as an unmarked dash under either credit", () => {
+    // a thin log's line hides its rates (engine.ts coverEntry). Fails if "You" brings its ADR back from
+    // the counts, or marks the dash as moved
+    const thin = { ...BASE, adr: null, v: { ...BASE.v, adr: null } };
+    function Thin() {
+      const l = credited(thin, useCredit());
+      return <span data-thin><Moved l={l} f="adr" game="–">{l.adr === null ? "–" : l.adr.toFixed(1)}</Moved></span>;
+    }
+    render(<><TakeoverSwitch /><Thin /></>);
+    act(() => { radio("You").click(); });
+    const el = host.querySelector("[data-thin]")!;
+    expect([el.textContent, el.querySelector(".moved")]).toEqual(["–", null]);
   });
 
   it("is one choice for every view on the page", () => {

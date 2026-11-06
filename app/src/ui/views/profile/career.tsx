@@ -15,7 +15,8 @@ import { GameIcon } from "../../components/GameIcon";
 import { MetricList, MetricRow, ShareTrack, THIN } from "../../components/MetricRow";
 import { Segmented } from "../../components/controls";
 import { fmtMetric } from "../../data/engine";
-import { CreditedRate } from "../../components/Takeover";
+import { CreditedRate, MovedValue } from "../../components/Takeover";
+import { creditedBest, creditedRow, useCredit } from "../../data/credit";
 import { useCall } from "../../data/hooks";
 import type { MatchEntry } from "../../data/match";
 import { hasMetric, metric } from "../../data/meta";
@@ -200,7 +201,12 @@ export function RecordsCard({ q, list }: { q: Query; list: MatchEntry[] }) {
   const [all, setAll] = useState(false);
   const listId = useId();
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
-  const recs = useMemo(() => (r.data ? recordsOf(r.data) : null), [r.data]);
+  // under "You", the bests the takeover credit moves come from the credited summaries (data/credit.ts creditedBest)
+  const credit = useCredit();
+  const recs = useMemo(() => (r.data ? recordsOf(r.data.map((b) => creditedBest(b, credit))) : null), [r.data, credit]);
+  const shown = (b: Best & { game: Best }) => <MovedValue game={b.game.value} you={b.game.you?.value ?? b.game.value} text={(x) => bestText({ ...b, value: x })} quiet />;
+  // the record is a link, so what moved is said in its tooltip rather than by a mark of its own
+  const movedTip = (b: Best & { game: Best }) => (credit === "you" && b.value !== b.game.value ? `Includes your play in bots you took over; the game's record is ${bestText(b.game)}.` : null);
   return (
     <Card title="Records" tip="Your best single match for each stat. Rates need a match of 10 rounds or more."
       aside={recs ? <span className="meta">{plural(recs.lead.length + recs.rest.length, "record")}</span> : undefined}>
@@ -209,9 +215,9 @@ export function RecordsCard({ q, list }: { q: Query; list: MatchEntry[] }) {
           <ul className="recs">
             {recs.lead.map((b) => (
               <li key={b.id}>
-                <a className="rec" href={matchHref(b.file)} data-tip={[tipOf(b.id) ?? `Most ${bestLabel(b.id).toLowerCase()} in one match.`, recordMap(byFile.get(b.file))].filter(Boolean).join("\n")}>
+                <a className="rec" href={matchHref(b.file)} data-tip={[tipOf(b.id) ?? `Most ${bestLabel(b.id).toLowerCase()} in one match.`, movedTip(b), recordMap(byFile.get(b.file))].filter(Boolean).join("\n")}>
                   <span className="caps">{bestLabel(b.id)}</span>
-                  <b className="disp disp--m rec__v"><Num v={bestText(b)} /></b>
+                  <b className="disp disp--m rec__v">{shown(b)}</b>
                   <RecordWhere e={byFile.get(b.file)} />
                 </a>
               </li>
@@ -226,10 +232,10 @@ export function RecordsCard({ q, list }: { q: Query; list: MatchEntry[] }) {
                 <ul id={listId} className="recs__all" aria-label="Other records">
                   {recs.rest.map((b) => (
                     <li key={b.id}>
-                      <a href={matchHref(b.file)} className="recs__row">
+                      <a href={matchHref(b.file)} className="recs__row" data-tip={movedTip(b) ?? undefined}>
                         <span>{bestLabel(b.id)}</span>
                         <RecordWhere e={byFile.get(b.file)} />
-                        <b className="num"><Num v={bestText(b)} /></b>
+                        <b className="num">{shown(b)}</b>
                       </a>
                     </li>
                   ))}
@@ -271,7 +277,9 @@ export function WhereYouRank({ ranks, q, list }: { ranks: Ranks | null; q: Query
   const k = kind && pairs[kind] ? kind : first;
   const pair = k ? pairs[k] : null;
   const ch = useCall("periodCompare", mode === "change" && pair ? [q, pair.current, pair.previous] : null);
-  const rows = useMemo(() => (ch.data ? RANK_ROWS.flatMap((id) => ch.data!.filter((d) => d.id === id)) : null), [ch.data]);
+  // the change is your own figures against your own, so ADR and KPR take the takeover credit (MetricDelta.you)
+  const credit = useCredit();
+  const rows = useMemo(() => (ch.data ? RANK_ROWS.flatMap((id) => ch.data!.filter((d) => d.id === id)).map((d) => ({ ...creditedRow(d, credit), game: d })) : null), [ch.data, credit]);
   const approx = RANK_ROWS.some((x) => hasMetric(x) && metric(x).status === "approx");
   return (
     <Card title="Where you rank" tip={PANEL_TIP.whereYouRank} className="wyr"
@@ -296,12 +304,13 @@ export function WhereYouRank({ ranks, q, list }: { ranks: Ranks | null; q: Query
             <ul className="pchg" aria-label="Change since the period before">
               <li className="pchg__cols" aria-hidden><span /><span className="caps">Before</span><span /><span className="caps">Now</span><span className="caps">Change</span></li>
               {rows.map((d) => (
-                <li key={d.id} className="pchg__row" tabIndex={0} data-tip={tipOf(d.id)}
+                <li key={d.id} className="pchg__row" tabIndex={0}
+                  data-tip={[tipOf(d.id), d.moved ? `Includes your play in bots you took over; the game's figures are ${fmtMetric(d.id, d.game.before)} before and ${fmtMetric(d.id, d.game.value)} now.` : null].filter(Boolean).join("\n")}
                   aria-label={`${RANK_LABELS[d.id] ?? metric(d.id).label}: ${fmtMetric(d.id, d.before)} before, ${fmtMetric(d.id, d.value)} now${d.delta === null ? "" : `, ${d.direction ?? ""} by ${fmtChange(d.id, d.delta)}`}`}>
                   <span className="pchg__lab">{RANK_LABELS[d.id] ?? metric(d.id).label}</span>
-                  <span className="num pchg__before"><Num v={fmtMetric(d.id, d.before)} /></span>
+                  <span className="num pchg__before"><span className={d.moved ? "moved moved--on" : undefined}><Num v={fmtMetric(d.id, d.before)} /></span></span>
                   <span className="pchg__arrow" aria-hidden>→</span>
-                  <b className="num pchg__now"><Num v={fmtMetric(d.id, d.value)} /></b>
+                  <b className="num pchg__now"><span className={d.moved ? "moved moved--on" : undefined}><Num v={fmtMetric(d.id, d.value)} /></span></b>
                   <span className={`num pchg__d ${d.direction ? DIR_CLASS[d.direction] : "faint"}`}>{d.delta === null ? "–" : fmtChange(d.id, d.delta)}</span>
                 </li>
               ))}

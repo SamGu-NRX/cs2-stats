@@ -6,6 +6,7 @@ import { addBests, awardsOf, groupSessions, SESSION_GAP_H, type Best } from "../
 import type { MatchFacts } from "../stats/facts";
 import { rating3Of } from "../stats/rating3";
 import { rollup, type Summary } from "../stats/rollup";
+import { YOU_MOVES, youMeasures, youSummary } from "../stats/takeover";
 import { matchWon } from "../stats/trends";
 import { startMs } from "../ui/data/match";
 import type { ClutchRow, HighlightRow, MomentRow, MultiKillRow, Query, Session } from "./protocol";
@@ -18,15 +19,25 @@ const ids = (player: string | string[]) => new Set(Array.isArray(player) ? playe
 
 export function matchCalls(each: EachMatch, summary: (q: Query) => Promise<Summary>) {
   return {
+    /** Each best, and for a best the takeover credit moves, the best under "You" too, so the switch needs no second call. */
     async personalBests(q: Query): Promise<Best[]> {
       const acc: Record<string, Best> = {};
-      await each(q.files, (f, file) => addBests(acc, file, rollup([f], q.filter)));
-      return Object.values(acc);
+      const you: Record<string, Best> = {};
+      await each(q.files, (f, file) => {
+        const s = rollup([f], q.filter);
+        addBests(acc, file, s);
+        addBests(you, file, youSummary(s));
+      });
+      return Object.values(acc).map((b) => {
+        // only where "You" changes the best: its value, or the match it was set in
+        const y = YOU_MOVES.has(b.id) ? you[b.id] : undefined;
+        return y && (y.value !== b.value || y.file !== b.file) ? { ...b, you: { value: y.value, file: y.file } } : b;
+      });
     },
     async sessions(q: Query, gapHours = SESSION_GAP_H): Promise<Session[]> {
       const me = ids(q.filter.player);
       const spans = new Map<string, { start: number; end: number }>();
-      const rows = new Map<string, { file: string; rating: number | null; kills: number; won: boolean | null }>();
+      const rows = new Map<string, { file: string; rating: number | null; kills: number; youKills: number; won: boolean | null }>();
       await each(q.files, (f, file) => {
         // a match the filter keeps none of the player's rounds in (another map, outside the dates, a
         // match without the player) is not part of any session, and does not bridge two of them
@@ -34,16 +45,18 @@ export function matchCalls(each: EachMatch, summary: (q: Query) => Promise<Summa
         if (!s.m.rounds) return;
         const start = startMs(f.match);
         spans.set(file, { start, end: start + 1000 * (f.match.durationS ?? 0) });
-        rows.set(file, { file, rating: rating3Of(s).value, kills: s.m.kills, won: matchWon(f, me) });
+        rows.set(file, { file, rating: rating3Of(s).value, kills: s.m.kills, youKills: youMeasures(s.m).kills, won: matchWon(f, me) });
       });
       const groups = groupSessions([...spans].map(([file, x]) => ({ file, ...x })), gapHours);
       return Promise.all(groups.map(async (files) => {
         const s = await summary({ files, filter: q.filter });
         const of = files.map((file) => rows.get(file)!);
+        const you = youMeasures(s.m);
         return {
           files, start: Math.min(...files.map((x) => spans.get(x)!.start)), end: Math.max(...files.map((x) => spans.get(x)!.end)),
           wins: of.filter((r) => r.won === true).length, losses: of.filter((r) => r.won === false).length, ties: of.filter((r) => r.won === null).length,
           rounds: s.m.rounds, kills: s.m.kills, deaths: s.m.deaths, rating: rating3Of(s).value, awards: awardsOf(of),
+          you: { kills: you.kills, deaths: you.deaths, mostKills: awardsOf(of.map((r) => ({ ...r, kills: r.youKills }))).mostKills },
         };
       }));
     },

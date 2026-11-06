@@ -28,7 +28,7 @@ import type { Session } from "../../worker/protocol";
 import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
 import { go, matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "../router";
 import { Segmented } from "../components/controls";
-import { Moved, TakeoverSwitch } from "../components/Takeover";
+import { Moved, MovedValue, TakeoverSwitch } from "../components/Takeover";
 import { credited, hasTakeover, useCredit } from "../data/credit";
 import { ProMatches } from "./ProMatches";
 import { matchUrl, type LeetifyMatch } from "../data/leetify/api";
@@ -131,6 +131,7 @@ export function sessionWhen(x: Pick<SessionRow, "start" | "end" | "day">): strin
  * kills. A chip narrows the table to that session's matches (?session=); pressing it again clears it.
  */
 function SessionStrip({ sessions, error, selected }: { sessions: SessionRow[] | null; error: string | null; selected: SessionRow | null }) {
+  const credit = useCredit();
   if (sessions && !sessions.length) return null;
   return (
     <section className="sessions" aria-label="Sessions">
@@ -154,11 +155,14 @@ function SessionStrip({ sessions, error, selected }: { sessions: SessionRow[] | 
                     <b className="num sess__rec">{x.wins}<span className="faint">–</span>{x.losses}{x.ties ? <><span className="faint">–</span>{x.ties}</> : null}</b>
                     <b className="disp sess__rating" style={{ color: x.rating === null ? undefined : ratingText(x.rating) }}>{fmtRating(x.rating)}</b>
                   </span>
-                  <span className="meta sess__sub">{plural(n, "match", "matches")} · <span className="num">{x.kills}–{x.deaths}</span> K–D</span>
+                  {/* the session is a button, so the marks are quiet and the line's tooltip names the game's K-D */}
+                  <span className="meta sess__sub" data-tip={credit === "you" && (x.you.kills !== x.kills || x.you.deaths !== x.deaths) ? `Includes your play in bots you took over; the game's K–D is ${x.kills}–${x.deaths}.` : undefined}>
+                    {plural(n, "match", "matches")} · <span className="num"><MovedValue game={x.kills} you={x.you.kills} text={String} quiet />–<MovedValue game={x.deaths} you={x.you.deaths} text={String} quiet /></span> K–D
+                  </span>
                   {n > 1 && (x.awards.bestMatch || x.awards.mostKills) && (
                     <span className="meta sess__awards">
                       {x.awards.bestMatch && <span>Best match <b className="num">{fmtRating(x.awards.bestMatch.rating)}</b></span>}
-                      {x.awards.mostKills && <span>Most kills <b className="num">{x.awards.mostKills.kills}</b></span>}
+                      {x.awards.mostKills && <span>Most kills <b className="num"><MovedValue game={x.awards.mostKills.kills} you={x.you.mostKills?.kills ?? x.awards.mostKills.kills} text={String} quiet /></b></span>}
                     </span>
                   )}
                 </button>

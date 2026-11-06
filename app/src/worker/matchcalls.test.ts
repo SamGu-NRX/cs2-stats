@@ -1,7 +1,7 @@
 // The worker's per-match calls (matchcalls.ts) on hand-built one-round matches, streamed the way the
 // worker streams them: each match with its own file.
 import { expect, it } from "vitest";
-import type { MatchFacts } from "../stats/facts";
+import type { MatchFacts, Measures } from "../stats/facts";
 import { rollup } from "../stats/rollup";
 import { FREEZE_END, oneRound } from "../stats/testing/match";
 import { matchCalls } from "./matchcalls";
@@ -33,6 +33,28 @@ it("keeps each match's own file when two files hold the same match id", async ()
   const [session] = await calls.sessions(q);
   expect([session.files, session.kills, session.awards.mostKills]).toEqual([["a.json", "b.json"], 4, { file: "a.json", kills: 3 }]);
   expect((await calls.multiKills(q)).map((r) => [r.file, r.kills])).toEqual([["a.json", 3]]);
+});
+
+/** `f` with takeover measures on every round of player `who` (facts.ts takeover*: play made in a bot's body). */
+const tookOver = (f: MatchFacts, who: string, x: Partial<Measures>): MatchFacts =>
+  ({ ...f, pr: f.pr.map((r) => (f.players[r.pi].id === who ? { ...r, m: { ...r.m, ...x } } : r)) });
+
+it("gives sessions and personal bests under the takeover credit too, from the credited counts", async () => {
+  // a.json: 1 kill of his own and, in a bot's body, 3 kills (1 a headshot), 1 death and 200 damage;
+  // b.json: 2 kills, no takeover. Fails if a session's K-D or most kills, or the kills, headshot kills
+  // or damage best, ignores the takeover play under "You", or if a best "You" does not move (assists)
+  // or does not change (none here) carries a "You" figure
+  const a = tookOver(match(1, "2026-10-24T20:00:00Z"), "a", { takeoverKills: 3, takeoverHsKills: 1, takeoverDeaths: 1, takeoverDmg: 200 });
+  const calls = callsOver({ "a.json": a, "b.json": match(2, "2026-10-24T21:00:00Z") });
+  const q = { files: ["a.json", "b.json"], filter: { player: "a" } };
+  const [session] = await calls.sessions(q);
+  expect([session.kills, session.deaths, session.awards.mostKills]).toEqual([3, 0, { file: "b.json", kills: 2 }]);
+  expect(session.you).toEqual({ kills: 6, deaths: 1, mostKills: { file: "a.json", kills: 4 } });
+  const best = Object.fromEntries((await calls.personalBests(q)).map((b) => [b.id, b]));
+  expect(best.kills).toEqual({ id: "kills", value: 2, file: "b.json", you: { value: 4, file: "a.json" } });
+  expect(best.hsKills.you).toEqual({ value: 1, file: "a.json" });
+  expect(best.dmg.you).toEqual({ value: 200, file: "a.json" });
+  expect(best.assists.you).toBeUndefined();
 });
 
 it("builds sessions from the matches the query's filters keep", async () => {

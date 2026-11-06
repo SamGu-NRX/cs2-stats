@@ -8,7 +8,7 @@ import { Card } from "../../components/Card";
 import { DivergingBars } from "../../components/charts";
 import { Segmented } from "../../components/controls";
 import { Moved, TakeoverSwitch } from "../../components/Takeover";
-import { credited, hasTakeover, useCredit, type CreditedLine } from "../../data/credit";
+import { credited, hasTakeover, moves, useCredit, type CreditField, type CreditedLine } from "../../data/credit";
 import { DataTable } from "../../components/DataTable";
 import { HoverCard } from "../../components/overlay";
 import { multiKillRows, pooledRates, RATING_LABEL, SIDE_OPTIONS, statLine, type SideKey, type StatLine } from "../../data/engine";
@@ -185,14 +185,15 @@ function MultiChips({ c }: { c: Multi }) {
 }
 
 /** You against the lobby: where your number sits between the worst and best of the ten players. */
-function Lobby({ lines, human, who }: { lines: StatLine[]; human: number; who: string }) {
-  const rows: { label: string; get: (l: StatLine) => number | null; fmt: (x: number | null) => string; lower?: boolean }[] = [
+function Lobby({ lines, human, who }: { lines: CreditedLine[]; human: number; who: string }) {
+  // `f`: the figure the takeover credit can move, so a moved value is marked and its tooltip gives the game's
+  const rows: { label: string; get: (l: StatLine) => number | null; fmt: (x: number | null) => string; lower?: boolean; f?: CreditField }[] = [
     { label: "Rating", get: (l) => l.rating, fmt: fmtRating },
-    { label: "ADR", get: (l) => l.adr, fmt: fmtAdr },
+    { label: "ADR", get: (l) => l.adr, fmt: fmtAdr, f: "adr" },
     { label: "KAST", get: (l) => l.kast, fmt: (x) => fmtPct(x) },
     { label: "Swing", get: (l) => (l.swing === null ? null : 100 * l.swing), fmt: (x) => (x === null ? "–" : fmtSwing(x / 100)) },
-    { label: "HS%", get: (l) => l.hs, fmt: (x) => fmtPct(x) },
-    { label: "Deaths per round", get: (l) => l.dpr, fmt: (x) => (x === null ? "–" : x.toFixed(2)), lower: true },
+    { label: "HS%", get: (l) => l.hs, fmt: (x) => fmtPct(x), f: "hs" },
+    { label: "Deaths per round", get: (l) => l.dpr, fmt: (x) => (x === null ? "–" : x.toFixed(2)), lower: true, f: "dpr" },
   ];
   return (
     <Card title={<>{who} against the lobby <Hint tip="Bar spans the lobby's lowest to highest; the tick is the average." /></>} aside={<span className="meta">All ten players</span>}>
@@ -207,14 +208,16 @@ function Lobby({ lines, human, who }: { lines: StatLine[]; human: number; who: s
           const pos = (x: number) => (hi === lo ? 50 : ((x - lo) / (hi - lo)) * 100);
           const rank = [...vals].sort((a, b) => (r.lower ? a - b : b - a)).indexOf(you) + 1;
           const t = toScore(you, avg, Math.max(1e-6, (hi - lo) / 2), r.lower);
+          const moved = !!r.f && lines[human].moved && moves(lines[human], r.f);
+          const tip = [`Lobby average ${r.fmt(avg)}, range ${r.fmt(lo)} to ${r.fmt(hi)}`, moved ? `Includes your play in bots you took over; the game's figure is ${r.fmt(r.get(lines[human].game))}.` : null].filter(Boolean).join("\n");
           return (
-            <li key={r.label} data-tip={`Lobby average ${r.fmt(avg)}, range ${r.fmt(lo)} to ${r.fmt(hi)}`} tabIndex={0}>
+            <li key={r.label} data-tip={tip} tabIndex={0}>
               <span className="lobby__l">{r.label}</span>
               <span className="lobby__track">
                 <i className="lobby__avg" style={{ left: `${pos(avg)}%` }} />
                 <i className="lobby__you" style={{ left: `${pos(you)}%`, background: scoreFill(t) }} />
               </span>
-              <b className="num" style={{ color: scoreText(t) }}>{r.fmt(you)}</b>
+              <b className="num" style={{ color: scoreText(t) }}><span className={moved ? "moved moved--on moved--tone" : undefined}>{r.fmt(you)}</span></b>
               <span className="lobby__rank num faint">#{rank}</span>
             </li>
           );

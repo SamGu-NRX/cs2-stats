@@ -7,6 +7,7 @@ import { inputKnown } from "./facts";
 import { METRICS, type Need } from "./metrics";
 import { BEST_COUNTS, COMPOSITES, type CompositePart } from "./career-lists";
 import type { Summary } from "./rollup";
+import { YOU_MOVES, youSummary } from "./takeover";
 
 export { BEST_COUNTS, COMPOSITES, type CompositePart };
 
@@ -50,10 +51,23 @@ export interface MetricDelta {
   delta: number | null;
   /** performance metrics: better or worse (lowerIsBetter flips it); identity metrics: higher or lower; same when equal */
   direction: "better" | "worse" | "higher" | "lower" | "same" | null;
+  /** the same under the takeover credit "You" (takeover.ts YOU_MOVES); absent where "You" changes neither value */
+  you?: Omit<MetricDelta, "id" | "you">;
 }
 
-/** Every metric over `now` against the same metric over `before`. */
+/**
+ * Every metric over `now` against the same metric over `before`, and for a metric the takeover credit
+ * moves, the same under "You" where it changes either value, so a view can show either credit.
+ */
 export function metricDeltas(now: Summary, before: Summary): MetricDelta[] {
+  const you = new Map(deltasOf(youSummary(now), youSummary(before)).map((d) => [d.id, d]));
+  return deltasOf(now, before).map((d) => {
+    const y = YOU_MOVES.has(d.id) ? you.get(d.id) : undefined;
+    return y && (y.value !== d.value || y.before !== d.before) ? { ...d, you: { value: y.value, before: y.before, delta: y.delta, direction: y.direction } } : d;
+  });
+}
+
+function deltasOf(now: Summary, before: Summary): MetricDelta[] {
   return METRICS.map((m) => {
     const value = m.value(now), prev = m.value(before);
     if (value === null || prev === null) return { id: m.id, value, before: prev, delta: null, direction: null };
@@ -68,7 +82,13 @@ export function metricDeltas(now: Summary, before: Summary): MetricDelta[] {
 /** A match must have this many rounds for its rates to stand as a personal best. Ours, no fit. */
 export const BEST_MIN_ROUNDS = 10;
 
-export interface Best { id: string; value: number; file: string }
+export interface Best {
+  id: string;
+  value: number;
+  file: string;
+  /** the best under the takeover credit "You" (takeover.ts YOU_MOVES), which may be another match; absent where "You" leaves the best as it is */
+  you?: { value: number; file: string };
+}
 
 /**
  * The match recorded every input in `needs` in full. "model" chooses the pro pool and "eco" gates only

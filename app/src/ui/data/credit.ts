@@ -13,7 +13,9 @@
 // One choice for the whole app, kept in localStorage like the privacy setting (privacy.ts), so the
 // scoreboard, the match list, Profile and Home agree.
 import { useSyncExternalStore } from "react";
+import type { Best } from "../../stats/career";
 import type { Measures } from "../../stats/facts";
+import { shiftOf, youMeasures, type Shift } from "../../stats/takeover";
 import type { StatLine } from "./engine";
 
 export type Credit = "bot" | "you";
@@ -64,21 +66,11 @@ export const useCredit = () => useSyncExternalStore(subscribe, creditNow);
 export const CREDIT_TIP =
   "After you die you can take over a teammate bot. The game credits what you do in its body to the bot.\n" +
   "You: counts those kills, deaths and damage as yours, and takes them off the bot.\n" +
-  "Rating 3.0, KAST, openings, clutches, multi-kills and pro comparisons always use the game's credit.";
+  "Rating 3.0, KAST, openings, clutches, multi-kills, verdicts and pro comparisons always use the game's credit.";
 
-/** What "you" adds to one line: the player's play in bots' bodies, less a human's play in this one. */
-export interface Shift { kills: number; hsKills: number; deaths: number; dmg: number }
+export { shiftOf, type Shift };
 
 const at = (m: Partial<Measures>, k: keyof Measures) => m[k] ?? 0;
-
-export function shiftOf(m: Partial<Measures>): Shift {
-  return {
-    kills: at(m, "takeoverKills") - at(m, "drivenKills"),
-    hsKills: at(m, "takeoverHsKills") - at(m, "drivenHsKills"),
-    deaths: at(m, "takeoverDeaths") - at(m, "drivenDeaths"),
-    dmg: at(m, "takeoverDmg") - at(m, "drivenDmg"),
-  };
-}
 
 /** Whether any takeover play is in these measures, made by this player or in this player's body. */
 export const hasTakeover = (m: Partial<Measures>) =>
@@ -108,22 +100,52 @@ export function shifts(s: Shift | null, f: CreditField): boolean {
   }
 }
 
-const per = (a: number, b: number) => (b ? a / b : null);
+/**
+ * A rate's denominator in the game's measures. Each of these rates is null only when it is 0
+ * (stats/metrics.ts per and pct), so a rate that is null over a non-zero denominator is one the line
+ * hides: the coverage rule hides a thin log's rates (engine.ts coverEntry).
+ */
+const OVER: Record<"adr" | "kpr" | "dpr" | "hs", (m: Measures) => number> = { adr: (m) => m.rounds, kpr: (m) => m.rounds, dpr: (m) => m.rounds, hs: (m) => m.kills };
+
+/** The line hides this rate (see OVER): "You" leaves it hidden. */
+const hidden = (l: StatLine, f: keyof typeof OVER) => l[f] === null && OVER[f](l.m) !== 0;
+
+/** Whether "You" changes a figure the line shows: a shift moves it, and the line does not hide it. */
+export function moves(l: CreditedLine, f: CreditField): boolean {
+  return shifts(l.shift, f) && !(f in OVER && hidden(l.game, f as keyof typeof OVER));
+}
 
 /**
  * The line as `c` credits it. Under "bot" it is the line as derived. Under "you" the moved counts are
- * applied to the measures and to the values read from them (the same ratios as stats/metrics.ts kpr,
- * dpr, adr and hs); every other value is the game's.
+ * applied to the measures and to the rates read from them (the same ratios as stats/metrics.ts kpr,
+ * dpr, adr and hs), except a rate the line hides, which stays hidden; every other value is the game's.
  */
 export function credited(l: StatLine, c: Credit): CreditedLine {
   const s = shiftOf(l.m);
   const shift = s.kills || s.hsKills || s.deaths || s.dmg ? s : null;
   if (c === "bot" || !shift) return { ...l, game: l, shift, moved: false };
-  const m: Measures = { ...l.m, kills: l.m.kills + s.kills, hsKills: l.m.hsKills + s.hsKills, deaths: l.m.deaths + s.deaths, dmg: l.m.dmg + s.dmg };
-  const adr = per(m.dmg, m.rounds), kpr = per(m.kills, m.rounds), dpr = per(m.deaths, m.rounds);
-  const hs = m.kills ? (100 * m.hsKills) / m.kills : null;
+  const m = youMeasures(l.m);
+  const rate = (f: keyof typeof OVER, num: number, scale = 1) => (hidden(l, f) || !OVER[f](m) ? null : (scale * num) / OVER[f](m));
+  const adr = rate("adr", m.dmg), kpr = rate("kpr", m.kills), dpr = rate("dpr", m.deaths), hs = rate("hs", m.hsKills, 100);
   return {
     ...l, m, v: { ...l.v, adr, kpr, dpr, hs }, kills: m.kills, deaths: m.deaths, diff: m.kills - m.deaths, adr, kpr, dpr, hs,
     game: l, shift, moved: true,
   };
+}
+
+/**
+ * A personal best under `c`, with the game's beside it. Under "you" a best the credit moves is the one
+ * the worker chose from the credited summaries (career.ts Best.you), which may be another match.
+ */
+export function creditedBest(b: Best, c: Credit): Best & { game: Best } {
+  return c === "you" && b.you ? { ...b, value: b.you.value, file: b.you.file, game: b } : { ...b, game: b };
+}
+
+/**
+ * One of the player's own comparison rows under `c` (this match against recent ones, a period against
+ * the one before): under "you", its "You" figures where the worker gave them (career.ts
+ * MetricDelta.you), with `moved` set; otherwise the row as it is.
+ */
+export function creditedRow<T extends { you?: object }>(row: T, c: Credit): T & { moved: boolean } {
+  return c === "you" && row.you ? { ...row, ...row.you, moved: true } : { ...row, moved: false };
 }

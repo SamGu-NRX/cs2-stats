@@ -193,11 +193,16 @@ export interface YourMatchRow {
   delta: number | null;
   /** performance metrics: better or worse (lowerIsBetter flips it); identity metrics: higher or lower; same when equal */
   direction: "better" | "worse" | "higher" | "lower" | "same" | null;
+  /** the same under the takeover credit "You" (career.ts MetricDelta.you); absent where "You" changes neither value */
+  you?: Omit<YourMatchRow, "id" | "you">;
 }
 
 /** Every metric in this match against the same metric over the reference matches (the player's recent ones): career.ts metricDeltas, with `before` named `average`. */
 export function yourMatch(match: Summary, recent: Summary): YourMatchRow[] {
-  return metricDeltas(match, recent).map(({ before, ...row }) => ({ ...row, average: before }));
+  return metricDeltas(match, recent).map(({ before, you, ...row }) => ({
+    ...row, average: before,
+    ...(you ? { you: { value: you.value, average: you.before, delta: you.delta, direction: you.direction } } : {}),
+  }));
 }
 
 // ---------------------------------------------------------------- 5. opening duels
