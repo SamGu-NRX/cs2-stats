@@ -103,15 +103,36 @@ describe("rows made in a bot's body", () => {
     expect([hits(m), t.shots!.tick, t.positions!.steamid.map((x) => NAME[x])]).toEqual([["1300 H>E2"], [1300], ["H"]]);
   });
 
-  it("give a human dead at freeze end only the bodies the kills name", () => {
-    // fails if a human with no body in the live round (rounds.alive0 = 0) keeps his rows: with A named
-    // by his kill at 1600, his hit at 1300 is A's; with no body named, it is left out
-    const named = round([[1600, H, E1, A, null]], [[1300, H, E2]]);
+  it("give a human dead at freeze end only the bodies the kills name, from their first kills row", () => {
+    // fails if a human with no own body in the live round (rounds.alive0 = 0) keeps his rows, or if a
+    // body is assumed before the file names it: A is named by his kill at 1600, so his hit at 1300 is
+    // left out and the hits at 1600 and 1700 are A's
+    const named = round([[1600, H, E1, A, null]], [[1300, H, E2], [1600, H, E1], [1700, H, E2]]);
     named.rounds.alive0 = [[0, 1, 1, 1, 1]];
-    expect(hits(named)).toEqual(["1300 A>E2"]);
+    expect(hits(named)).toEqual(["1600 A>E1", "1700 A>E2"]);
     const none = round([], [[1300, H, E2]]);
     none.rounds.alive0 = [[0, 1, 1, 1, 1]];
     expect(hits(none)).toEqual([]);
+  });
+
+  it("keep the kills' bodies when the human's own death is missing", () => {
+    // fails if a missing own-death row throws away the kBody the kills record: alive at freeze end, he
+    // kills E1 in his own body at 1200, the file never records his death, and his kill at 1600 names A.
+    // His hit at 1200 is his, the hit at 1300 falls between the two kills and is left out, and the
+    // hits at 1600 and 1700 are A's
+    const m = round([[1200, H, E1, null, null], [1600, H, E2, A, null]], [[1200, H, E1], [1300, H, E2], [1600, H, E2], [1700, H, E2]]);
+    m.rounds.alive0 = [[1, 1, 1, 1, 1]];
+    expect(hits(m)).toEqual(["1200 H>E1", "1600 A>E2", "1700 A>E2"]);
+  });
+
+  it("end a body with no recorded death at its last kills row when another body follows", () => {
+    // fails if a body that never died is held until the next one's first row, or if the last body
+    // stops before round end: own death at 1150 (hit that tick is his), A kills at 1300 and is never
+    // seen dying, B kills at 1600. 1200 and 1300 are A's, 1400 is in no body, 1600 and 1800 are B's
+    const kills: Kill[] = [[1150, E1, H, null, null], [1300, H, E1, A, null], [1600, H, E2, B, null]];
+    expect(hits(round(kills, [[1150, H, E2], [1200, H, E2], [1300, H, E1], [1400, H, E2], [1600, H, E2], [1800, H, E1]]))).toEqual([
+      "1150 H>E2", "1200 A>E2", "1300 A>E1", "1600 B>E2", "1800 B>E1",
+    ]);
   });
 
   it("stay the human's in a round where he died in his own body more than once (a respawn mode)", () => {

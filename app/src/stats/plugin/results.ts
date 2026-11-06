@@ -55,20 +55,25 @@ function finalWinner(m: MatchFile): Side | null {
 }
 
 /**
- * How a round ended, from what the file holds about it, or null when it does not settle it.
+ * How a round ended, read from the end state the plugin records at round_end, or null when that
+ * record does not settle it.
  *
- * - A defuser means a defuse.
- * - Every player of the losing side who was alive at freeze end removed by the round's end tick means
- *   elimination. A player is removed by a death (by body, kills.vBody, so a bot a human took over
- *   counts as its own death) or a disconnect (leaves). Freeze-time kills do not count, since that
- *   player respawned for the live round (rounds.alive0). A death after the end tick is the bomb's
- *   blast or a kill after time ran out.
- * - Otherwise a loser was still standing, and the round ran out of time (CT win, no plant) or the
- *   bomb exploded (T win, planted). That is read only when a position row shows a standing loser
- *   alive within the last second before the end tick. Bots get a position row once a second, so a
- *   loser who was standing has one, and a death missing from the file is not taken for a survivor.
- * - If the file lost kill or disconnect rows to a full buffer (recon.dropped), a death may be missing,
- *   so only a defuse is read.
+ * A defuser means a defuse. Otherwise each player of the losing side who was alive at freeze end
+ * (rounds.alive0) is:
+ * - survived, when rounds.equipEnd is above 0: the plugin writes the pawn's equipment value at
+ *   round_end if it is alive, 0 if it is dead;
+ * - dead, when the file records his death by body (kills.vBody, so a bot a human drove dies as
+ *   itself) or his disconnect (leaves) at or before the end tick. Later removals are ignored: the
+ *   bomb's blast kills CTs after round_end, and a player may leave after the round;
+ * - unknown otherwise, since equipEnd 0 without a recorded death may be a live player carrying
+ *   nothing.
+ *
+ * An unknown loser, or one both dead and survived, leaves the reason null. A driven body's equipEnd
+ * may sit in the human's slot, which shows up as exactly such a contradiction. With every loser dead
+ * the round was an elimination. With one surviving, a planted T win is the bomb and an unplanted CT
+ * win is time; anything else is null. If the file lost kill or disconnect rows to a full buffer
+ * (recon.dropped), a death may be missing, so only a defuse is read. Freeze-time kills do not count,
+ * since that player respawned for the live round.
  *
  * Used only for rounds whose winner is rebuilt (roundResults). On 41 recorded files it gives the
  * game's reason on all 537 rounds the game reported one for (pnpm takeover-check prints the count).
@@ -81,23 +86,25 @@ export function howFromEvidence(m: MatchFile, ri: number, win: Side): RoundHow |
   if (m.recon?.dropped?.kills || m.recon?.dropped?.leaves) return null;
   const fe = R.freezeTick[ri];
   const dur = R.durTicks[ri];
-  if (fe === null || dur === null) return null;
+  const equipEnd = R.equipEnd?.[ri];
+  if (fe === null || dur === null || !equipEnd) return null;
   const end = fe + dur;
-  const removed = new Map<number, number>();
-  const remove = (pi: number, tick: number) => removed.set(pi, Math.max(removed.get(pi) ?? -Infinity, tick));
+  const dead = new Set<number>();
   const K = m.kills;
   for (let i = 0; i < K.ri.length; i++) {
-    if (K.ri[i] === ri && (K.flags[i] & KILL_FLAG.freeze) === 0) remove(K.vBody?.[i] ?? K.victim[i], K.tick[i]);
+    if (K.ri[i] === ri && (K.flags[i] & KILL_FLAG.freeze) === 0 && K.tick[i] <= end) dead.add(K.vBody?.[i] ?? K.victim[i]);
   }
   const L = m.leaves;
-  for (let i = 0; i < (L?.ri.length ?? 0); i++) if (L!.ri[i] === ri) remove(L!.pi[i], L!.tick[i]);
+  for (let i = 0; i < (L?.ri.length ?? 0); i++) if (L!.ri[i] === ri && L!.tick[i] <= end) dead.add(L!.pi[i]);
   const losers = R.side[ri].flatMap((s, pi) => (s === other(win) && R.alive0?.[ri]?.[pi] !== 0 ? [pi] : []));
-  const standing = losers.filter((p) => !((removed.get(p) ?? Infinity) <= end));
-  if (losers.length && !standing.length) return "elim";
-  const P = m.pos;
-  const from = end - (m.env.tickrate || 64);
-  const seen = P.ri.some((r, i) => r === ri && P.alive[i] && P.tick[i] >= from && P.tick[i] <= end && standing.includes(P.pi[i]));
-  if (!seen) return null;
+  if (!losers.length) return null;
+  let survivors = 0;
+  for (const p of losers) {
+    const survived = (equipEnd[p] ?? 0) > 0;
+    if (survived === dead.has(p)) return null;
+    if (survived) survivors++;
+  }
+  if (!survivors) return "elim";
   if (R.plantTick[ri] !== null) return win === 2 ? "bomb" : null;
   return win === 3 ? "time" : null;
 }

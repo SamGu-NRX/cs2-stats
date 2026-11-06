@@ -137,9 +137,10 @@ export function pluginToTables(m: MatchFile): MatchTables {
     return j !== undefined && j !== null && m.throws ? m.throws.tick[j] : m.grenades.tick[g];
   };
   /**
-   * The actor of a row: the body it acted in. Null when its own body was dead and no other is known
-   * (bodies.ts); the row is then left out, since crediting the player would count a bot's play as his,
-   * and the file cannot say which bot it was.
+   * The actor of a row: the body it acted in. Null when the file's evidence puts the player in no
+   * known body at that tick (bodies.ts: a gap between segments, or after the last body). The row is
+   * then left out, since crediting the player might count a bot's play as his, and the file cannot say
+   * which bot it was.
    */
   const actor = (pi: number | null, ri: number, tick: number) => (pi === null ? null : bodyAt(pi, ri, tick));
   /** The victim of a row: its body, else the player itself, since a row must name a victim and the attacker's credit is known either way. */

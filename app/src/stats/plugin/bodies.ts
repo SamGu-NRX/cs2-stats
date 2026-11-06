@@ -46,58 +46,97 @@ function fromTakeovers(t: Takeovers): BodyAt {
 }
 
 /**
- * Bodies inferred from kills, per human and round. The human is in his own body up to and including
- * his own death (his kills row with no vBody). After it he is in the bodies the kills rows name for
- * him (kBody as killer, vBody as victim), in tick order; each body's use ends at its death, the row
- * with that vBody, death tick included, or at round end. After the last body ends, no body is known:
- * he took over a bot that neither killed nor died, or none, and the lookup returns null.
+ * Bodies inferred from kills, per human and round, as a timeline of segments that only the file's
+ * evidence bounds. Kills rows are the only rows that name a body: kBody for his kill in a bot's body,
+ * vBody for the death of a bot he drove, and neither for his own body. Damage, blinds and grenades
+ * name only the controller, so they cannot bound a segment.
+ *
+ * - Own body: from round start when he was alive at freeze end (rounds.alive0), through his own death,
+ *   death tick included. Without a recorded own death, it ends at his last kill made in his own body
+ *   before any bot-body kill or death; a gap follows.
+ * - Each bot body, in the order the kills name them: it starts on the tick after the previous segment
+ *   when that segment ended at a recorded death, else at the body's first kills row. It ends at its
+ *   death, the row with that vBody, death tick included; without one, at its last kills row when
+ *   another body follows, else at round end.
+ *
+ * A tick in no segment (a gap, or after the last body) has no known body and the lookup returns null.
+ * The adapter then leaves out a row he made there and keeps him as the victim of a row done to him.
  *
  * Kills during freeze time are left out, as the adapter leaves them out of the kills table: a player
- * who dies then and respawns plays the live round in his own body. A human dead at freeze end
- * (rounds.alive0 = 0) has no own body in the live round, so only bodies the kills name are his there.
- * A round in which the human died in his own body more than once respawned him (the deathmatch-like
- * sessions the plugin also records), so a death there does not start a takeover and every row stays
- * his; so does a round where he was alive at freeze end and did not die. Bots never take over a body.
+ * who dies then and respawns plays the live round in his own body. A round in which he died in his
+ * own body more than once respawned him (the deathmatch-like sessions the plugin also records), so
+ * every row stays his; so does a round he started alive in which no kills row names a body or his
+ * death. Bots never take over a body.
  */
 function fromKills(m: MatchFile): BodyAt {
   const K = m.kills;
-  const order = K.ri.map((_, i) => i).sort((a, b) => K.ri[a] - K.ri[b] || K.tick[a] - K.tick[b] || a - b);
-  /** per "ri:pi": the own death tick and the bodies after it, each with the tick its use ends */
-  const plan = new Map<string, { death: number; bodies: { body: number; end: number }[] }>();
-  const live = order.filter((i) => (K.flags[i] & KILL_FLAG.freeze) === 0);
-  const deaths = new Map<string, number[]>();
-  for (const i of live) {
-    if ((K.vBody?.[i] ?? null) !== null || m.players.isBot[K.victim[i]]) continue;
-    const key = `${K.ri[i]}:${K.victim[i]}`;
-    deaths.set(key, [...(deaths.get(key) ?? []), K.tick[i]]);
+  const live = K.ri.map((_, i) => i).filter((i) => (K.flags[i] & KILL_FLAG.freeze) === 0).sort((a, b) => K.tick[a] - K.tick[b] || a - b);
+  const rowsOf = new Map<number, number[]>();
+  for (const i of live) rowsOf.set(K.ri[i], [...(rowsOf.get(K.ri[i]) ?? []), i]);
+  /** per "ri:pi": segments [from, to] (ticks, inclusive) and the body used in each */
+  const plan = new Map<string, { body: number; from: number; to: number }[]>();
+  for (const [ri, rows] of rowsOf) {
+    m.players.isBot.forEach((bot, pi) => {
+      if (bot) return;
+      const segments = timeline(m, rows, ri, pi);
+      if (segments) plan.set(`${ri}:${pi}`, segments);
+    });
   }
   m.rounds.winSide.forEach((_, ri) => m.players.isBot.forEach((bot, pi) => {
-    const own = deaths.get(`${ri}:${pi}`) ?? [];
-    const deadAtStart = m.rounds.alive0?.[ri]?.[pi] === 0;
-    if (bot) return;
-    if (deadAtStart && own.length === 0) plan.set(`${ri}:${pi}`, { death: -Infinity, bodies: [] });
-    else if (!deadAtStart && own.length === 1) plan.set(`${ri}:${pi}`, { death: own[0], bodies: [] });
+    // dead at freeze end and named nowhere: no body at all in the live round
+    if (!bot && m.rounds.alive0?.[ri]?.[pi] === 0 && !plan.has(`${ri}:${pi}`)) plan.set(`${ri}:${pi}`, []);
   }));
-  for (const i of live) {
-    const used: [number, number][] = [];
-    if (K.killer[i] !== null && (K.kBody?.[i] ?? null) !== null) used.push([K.killer[i]!, K.kBody![i]!]);
-    if ((K.vBody?.[i] ?? null) !== null) used.push([K.victim[i], K.vBody![i]!]);
-    for (const [pi, body] of used) {
-      const p = plan.get(`${K.ri[i]}:${pi}`);
-      if (!p || K.tick[i] <= p.death) continue;
-      const last = p.bodies[p.bodies.length - 1];
-      if (!last || last.body !== body) p.bodies.push({ body, end: Infinity });
-      if (K.victim[i] === pi && K.vBody?.[i] === body) p.bodies[p.bodies.length - 1].end = K.tick[i];
-    }
-  }
   return (pi, ri, tick) => {
-    const p = plan.get(`${ri}:${pi}`);
-    if (!p || tick <= p.death) return pi;
-    let start = p.death;
-    for (const b of p.bodies) {
-      if (tick > start && tick <= b.end) return b.body;
-      start = b.end;
-    }
-    return null;
+    const segments = plan.get(`${ri}:${pi}`);
+    if (!segments) return pi;
+    return segments.find((s) => tick >= s.from && tick <= s.to)?.body ?? null;
   };
+}
+
+/** One human's segments in one round from its live kills rows (tick order); null keeps every row his. */
+function timeline(m: MatchFile, rows: number[], ri: number, pi: number): { body: number; from: number; to: number }[] | null {
+  const K = m.kills;
+  const own = (i: number) => K.victim[i] === pi && (K.vBody?.[i] ?? null) === null;
+  const deaths = rows.filter(own);
+  if (deaths.length > 1) return null;
+  /** bot-body observations: [tick, body, whether the row is that body's death] */
+  const seen: [number, number, boolean][] = [];
+  for (const i of rows) {
+    if (K.killer[i] === pi && (K.kBody?.[i] ?? null) !== null) seen.push([K.tick[i], K.kBody![i]!, false]);
+    if (K.victim[i] === pi && (K.vBody?.[i] ?? null) !== null) seen.push([K.tick[i], K.vBody![i]!, true]);
+  }
+  const alive = m.rounds.alive0?.[ri]?.[pi] !== 0;
+  if (!deaths.length && !seen.length) return null;
+  if (!alive && deaths.length) return null;
+  const out: { body: number; from: number; to: number }[] = [];
+  /** the tick of the recorded death that ended the previous segment, if it ended at one */
+  let after: number | null = null;
+  let ownEnd = -Infinity;
+  if (alive) {
+    if (deaths.length) {
+      ownEnd = K.tick[deaths[0]];
+      after = ownEnd;
+    } else {
+      const firstBody = seen[0][0];
+      const ownKills = rows.filter((i) => K.killer[i] === pi && (K.kBody?.[i] ?? null) === null && K.tick[i] < firstBody);
+      if (ownKills.length) ownEnd = K.tick[ownKills[ownKills.length - 1]];
+    }
+    if (ownEnd > -Infinity) out.push({ body: pi, from: -Infinity, to: ownEnd });
+  }
+  // consecutive observations of one body form one use of it
+  const uses: { body: number; first: number; last: number; death: number | null }[] = [];
+  for (const [tick, body, death] of seen) {
+    if (tick <= ownEnd) continue;
+    let u = uses[uses.length - 1];
+    if (!u || u.body !== body || u.death !== null) uses.push((u = { body, first: tick, last: tick, death: null }));
+    u.last = tick;
+    if (death) u.death = tick;
+  }
+  uses.forEach((u, k) => {
+    const from = after === null ? u.first : after + 1;
+    const to = u.death ?? (k < uses.length - 1 ? u.last : Infinity);
+    out.push({ body: u.body, from, to });
+    after = u.death;
+  });
+  return out;
 }

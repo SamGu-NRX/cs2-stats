@@ -1,7 +1,7 @@
 // Round winners rebuilt from the scores (results.ts), on synthetic two-player files: the human (pi 0)
 // and one opponent (pi 1), whose score is [T, CT] at the start of each round.
 import { describe, expect, it } from "vitest";
-import { checkResultRules, howFromEvidence, roundResults } from "./results";
+import { howFromEvidence, roundResults } from "./results";
 import type { MatchFile, Side } from "./schema";
 
 /**
@@ -106,105 +106,105 @@ describe("the final round of a finished match", () => {
   });
 });
 
-describe("how a rebuilt round ended", () => {
-  it("counts a bot a human drove as dead when its body died, for an elimination", () => {
-    // fails if deaths are read from kills.victim (the controller) rather than the body: the opponent
-    // kills the human, then the bot whose body the human took over, inside the round
-    const m = file([false], [3], { maxrounds: 4 });
-    m.players = { key: ["76561190000000001", "B:mate", "B:enemy"], name: ["me", "mate", "enemy"], isBot: [false, true, true], startSide: [3, 3, 2] };
-    m.rounds.side = [[3, 3, 2]];
-    m.rounds.equip = [[4000, 4000, 4000]];
-    m.rounds.money = [[800, 800, 800]];
-    m.rounds.score = [[0, 0]];
-    m.status = "abandoned";
-    m.rounds.winSide = [2];
-    m.kills = {
-      ri: [0, 0], tick: [2000, 3000], killer: [2, 2], victim: [0, 0], assister: [null, null], flashAssister: [null, null], weapon: [0, 0],
-      flags: [0, 0], kpos: [null, null], vpos: [null, null], state: [null, null], kBody: [null, null], vBody: [null, 1],
-    };
-    const check = checkResultRules({ ...m, rounds: { ...m.rounds, how: ["elim"] } });
-    expect([check.howKnown, check.howAgree]).toEqual([1, 1]);
-  });
-
-  it("reads a T win with the last CT dying after the end tick as the bomb, once a position row shows that CT alive at the end", () => {
-    // fails if a death from the bomb's blast, one tick after the round's end, counts as elimination, or
-    // if the bomb is read without a sign that the CT was still standing
-    const m = file([false], [3], { maxrounds: 4, status: "abandoned" });
-    m.rounds.winSide = [2];
-    m.rounds.plantTick = [2000];
-    m.kills = kills([[5001, 0]]);
-    const how = (x: MatchFile) => howFromEvidence(x, 0, 2);
-    expect(how(m)).toBeNull();
-    m.pos = alivePos([[0, 4950]]);
-    expect(how(m)).toBe("bomb");
-  });
-});
-
-/** Kills rows [tick, victim, flags] by no one, in round 0 (flags 128: during freeze time). */
-function kills(rows: [tick: number, victim: number, flags?: number][]): MatchFile["kills"] {
+/** Kills rows [tick, victim, vBody, flags] by no one, in round 0 (flags 128: during freeze time). */
+function kills(rows: [tick: number, victim: number, vBody?: number | null, flags?: number][]): MatchFile["kills"] {
   const z = <T,>(v: T) => rows.map(() => v);
   return {
     ri: z(0), tick: rows.map((r) => r[0]), killer: z(null), victim: rows.map((r) => r[1]), assister: z(null), flashAssister: z(null), weapon: z(0),
-    flags: rows.map((r) => r[2] ?? 0), kpos: z(null), vpos: z(null), state: z(null), kBody: z(null), vBody: z(null),
+    flags: rows.map((r) => r[3] ?? 0), kpos: z(null), vpos: z(null), state: z(null), kBody: z(null), vBody: rows.map((r) => r[2] ?? null),
   };
 }
 
-/** Position rows [pi, tick] of living players in round 0. */
-function alivePos(rows: [number, number][]): MatchFile["pos"] {
-  const z = <T,>(v: T) => rows.map(() => v);
-  return { ri: z(0), tick: rows.map((r) => r[1]), pi: rows.map((r) => r[0]), x: z(0), y: z(0), z: z(0), place: z(null), alive: z(true) };
-}
-
-/** One CT win (round 0, ticks 1000 to 5000, no plant): the human and a mate are CT, two bots are T. */
-function ctWin(): MatchFile {
-  const m = file([true], [3], { maxrounds: 4, status: "abandoned" });
+/**
+ * Round 0 from tick 1000 to 5000, won by `win`, with the human (pi 0) and a mate (pi 1) on CT and two
+ * bots (pi 2, 3) on T, every one alive at freeze end. `equipEnd` is each player's value at round_end
+ * (0: dead).
+ */
+function round(win: Side, equipEnd: number[]): MatchFile {
+  const m = file([win === 3], [3], { maxrounds: 4, status: "abandoned" });
   m.players = { key: ["76561190000000001", "B:mate", "B:t1", "B:t2"], name: ["me", "mate", "t1", "t2"], isBot: [false, true, true, true], startSide: [3, 3, 2, 2] };
   m.rounds.side = [[3, 3, 2, 2]];
   m.rounds.equip = [[4000, 4000, 4000, 4000]];
   m.rounds.money = [[800, 800, 800, 800]];
-  m.rounds.winSide = [3];
+  m.rounds.alive0 = [[1, 1, 1, 1]];
+  m.rounds.equipEnd = [equipEnd];
+  m.rounds.winSide = [win];
   return m;
 }
 
-describe("how a rebuilt round ended, when the file may lack a death", () => {
-  const how = (m: MatchFile) => howFromEvidence(m, 0, 3);
+describe("how a rebuilt round ended, from the end state at round_end", () => {
+  const how = (m: MatchFile) => howFromEvidence(m, 0, m.rounds.winSide[0]!);
 
-  it("counts a T who disconnected as removed, so the last T's death is an elimination", () => {
-    // fails if a disconnect leaves that T counted as standing, which reads the round as time
-    const m = ctWin();
-    m.leaves = { ri: [0], tick: [2000], pi: [2], alive: [1] };
-    m.kills = kills([[3000, 3]]);
-    m.pos = alivePos([[2, 1900]]);
+  it("reads an elimination when every loser has a recorded death and no equipment at the end", () => {
+    // fails if a loser with no equipment is taken for dead without a recorded death, or if a disconnect
+    // does not count as one: t1 dies, t2 leaves before the end
+    const m = round(3, [4000, 4000, 0, 0]);
+    m.kills = kills([[3000, 2]]);
+    m.leaves = { ri: [0], tick: [2000], pi: [3], alive: [1] };
+    expect(how(m)).toBe("elim");
+    m.leaves = undefined;
+    expect(how(m)).toBeNull();
+  });
+
+  it("counts a bot a human drove as dead when its body died", () => {
+    // fails if deaths are read from kills.victim (the controller) rather than the body: T kills the
+    // human, then the mate whose body he drove
+    const m = round(2, [0, 0, 4000, 4000]);
+    m.kills = kills([[2000, 0], [3000, 0, 1]]);
     expect(how(m)).toBe("elim");
   });
 
-  it("reads time only when a T is seen alive in the last second, and stays null when none is", () => {
-    // fails if a T whose death is missing from the file is taken for a survivor, which reads time
-    const m = ctWin();
-    m.kills = kills([[3000, 3]]);
-    expect(how(m)).toBeNull();
-    m.pos = alivePos([[2, 3900]]);
-    expect(how(m)).toBeNull();
-    m.pos = alivePos([[2, 4936]]);
-    expect(how(m)).toBe("time");
+  it("keeps a dead T an elimination when he disconnects after the round ends", () => {
+    // fails if the later of a death and a disconnect is taken as the removal: t2 dies at 3000 and
+    // leaves at 5001, one tick after the end
+    const m = round(3, [4000, 4000, 0, 0]);
+    m.kills = kills([[2500, 2], [3000, 3]]);
+    m.leaves = { ri: [0], tick: [5001], pi: [3], alive: [0] };
+    expect(how(m)).toBe("elim");
   });
 
-  it("stays null when the plugin dropped kill or disconnect rows", () => {
+  it("reads time when a T has equipment at the end, and the bomb when the CTs die to the blast after it", () => {
+    // fails if a survivor is not read from equipEnd, or a death after the end tick removes that player
+    const time = round(3, [4000, 4000, 0, 2700]);
+    time.kills = kills([[3000, 2]]);
+    expect(how(time)).toBe("time");
+    const bomb = round(2, [3100, 3100, 4000, 4000]);
+    bomb.rounds.plantTick = [2000];
+    bomb.kills = kills([[5001, 0], [5001, 1]]);
+    expect(how(bomb)).toBe("bomb");
+  });
+
+  it("stays null for a loser with no equipment at the end and no recorded death", () => {
+    // fails if a death missing from the file reads as a survivor (a position sample before it would say
+    // alive) or as a death: t2 has no equipment at the end, and nothing records him dying
+    const m = round(3, [4000, 4000, 0, 0]);
+    m.kills = kills([[3000, 2]]);
+    m.pos = { ri: [0], tick: [3500], pi: [3], x: [0], y: [0], z: [0], place: [null], alive: [true] };
+    expect(how(m)).toBeNull();
+  });
+
+  it("stays null when a loser is both recorded dead and holding equipment at the end", () => {
+    // fails if a contradiction, such as a driven body's value sitting in the human's slot, picks a side
+    const m = round(2, [3000, 0, 4000, 4000]);
+    m.kills = kills([[2000, 0], [3000, 0, 1]]);
+    expect(how(m)).toBeNull();
+  });
+
+  it("stays null in a file that lost kill or disconnect rows, or has no end state", () => {
     // fails if a match that lost kill rows to a full buffer still reads time or elimination from the rest
-    const m = ctWin();
-    m.kills = kills([[3000, 3]]);
-    m.pos = alivePos([[2, 4990]]);
+    const m = round(3, [4000, 4000, 0, 2700]);
+    m.kills = kills([[3000, 2]]);
     expect(how({ ...m, recon: { dropped: { kills: 1 } } })).toBeNull();
     expect(how({ ...m, recon: { dropped: { leaves: 1 } } })).toBeNull();
     expect(how({ ...m, recon: { dropped: { pos: 1 } } })).toBe("time");
+    expect(how({ ...m, rounds: { ...m.rounds, equipEnd: undefined } })).toBeNull();
   });
 
-  it("does not count a freeze-time death of a T who was alive at freeze end", () => {
-    // fails if a T killed in freeze time and respawned for the live round counts as eliminated
-    const m = ctWin();
-    m.rounds.alive0 = [[1, 1, 1, 1]];
-    m.kills = kills([[900, 2, 128], [3000, 3]]);
-    m.pos = alivePos([[2, 4990]]);
+  it("ignores a freeze-time death of a T who was alive at freeze end", () => {
+    // fails if a T killed in freeze time and respawned for the live round counts as dead, which here
+    // contradicts his equipment at the end
+    const m = round(3, [4000, 4000, 0, 2700]);
+    m.kills = kills([[900, 3, null, 128], [3000, 2]]);
     expect(how(m)).toBe("time");
   });
 });
