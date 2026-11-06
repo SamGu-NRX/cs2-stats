@@ -29,7 +29,8 @@ export function rovingIndex(key: string, i: number, n: number, upDown: boolean):
 export function Segmented<T extends string>({ options, value, onChange, label, kind = "radio", panelId }: {
   options: Option<T>[];
   value: T;
-  onChange: (v: T) => void;
+  /** `keyboard` when an arrow, Home or End (or a click with no pointer) picked it, which the motion table never animates */
+  onChange: (v: T, keyboard: boolean) => void;
   label: string;
   kind?: "radio" | "tabs";
   panelId?: string;
@@ -47,7 +48,7 @@ export function Segmented<T extends string>({ options, value, onChange, label, k
     return () => ro.disconnect();
   }, [value, options.length]);
   const enabled = options.filter((o) => !o.disabled);
-  const pick = (v: T, keyboard: boolean) => { setInstant(keyboard); onChange(v); };
+  const pick = (v: T, keyboard: boolean) => { setInstant(keyboard); onChange(v, keyboard); };
   const onKey = (e: KeyboardEvent) => {
     const to = rovingIndex(e.key, enabled.findIndex((o) => o.value === value), enabled.length, kind === "radio");
     if (to === null) return;

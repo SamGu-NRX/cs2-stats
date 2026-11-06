@@ -359,3 +359,18 @@ button[data-tip], a[data-tip], [role="button"][data-tip], th [data-tip] { cursor
 .switch[data-busy] { cursor: progress; }
 .switch:has(.switch__input:disabled) { cursor: default; opacity: 0.6; }
 @media (prefers-reduced-motion: reduce) { .switch__thumb { transition: background-color var(--d-color) ease; } }
+
+/* ---------------------------------------------------------------- takeover credit (components/Takeover.tsx) */
+.credit { display: inline-flex; align-items: center; gap: 8px; }
+/* a figure the takeover credit changed: cream like the app's own figures of note, dotted like a definition */
+.moved--on { color: var(--cream); text-decoration: underline dotted rgba(255, 215, 173, 0.55); text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: help; border-radius: 2px; }
+/* a figure coloured by how good it is (+/-, the lobby's) keeps its colour; the cream underline alone marks it */
+.moved--on[data-f="diff"], .moved--on.moved--tone { color: inherit; }
+/* the scoreboard's bar: the side filter and its round count on the left, the takeover switch on the right */
+.overview__bar .credit { margin-left: auto; }
+/* the switch flipped: the figures that moved fade in, so they are the ones the eye catches changing.
+   Opacity only, so reduced motion keeps it; it plays on the switch alone, never when a page opens. */
+.moved--fade { animation: moved-in var(--d-color) var(--ease-out); }
+@keyframes moved-in { from { opacity: 0.2; } }
+/* beside a tile's verdict when the tile shows the takeover credit's figure and the verdict reads the game's */
+.tile__judged { margin-left: auto; margin-right: 6px; font-size: 11px; cursor: help; text-decoration: underline dotted rgba(255, 215, 173, 0.55); text-underline-offset: 3px; }

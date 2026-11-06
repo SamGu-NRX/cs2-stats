@@ -80,6 +80,8 @@ export interface MetricRowProps {
   rank?: boolean;
   /** a value-only row under a score (engine.ts EXTRA_SUBS): not part of what is ranked */
   extra?: boolean;
+  /** the game's figure when the takeover credit "You" moved the value: the value is marked and the tooltip gives it */
+  moved?: string;
 }
 
 /** The row's tooltip: what the metric is, then where it ranks or why it does not. */
@@ -87,7 +89,8 @@ function tipOf(p: MetricRowProps, thin: boolean): string {
   const rank = p.pct !== null && !p.reason
     ? `${percentilePhrase(p.pct, p.kind)} ${p.kind === "performance" ? "of" : "against"} ${p.population}.`
     : p.reason ? sentence(p.reason) : p.value === null ? "None in these matches." : p.extra ? "Not part of the score." : "Not ranked.";
-  const lines = [p.tip, rank, thin ? `Only ${p.n}, so this may shift.` : null];
+  const moved = p.moved === undefined ? null : `Includes your play in bots you took over; the game's count is ${p.moved}.`;
+  const lines = [p.tip, moved, rank, thin ? `Only ${p.n}, so this may shift.` : null];
   return lines.filter(Boolean).join("\n");
 }
 
@@ -100,7 +103,7 @@ export function MetricRow(p: MetricRowProps) {
       <span className="mrow__lab">{p.label}{p.approx ? <ApproxMark plain /> : null}</span>
       {ranked ? <Track at={p.pct} tone={tone} hollow={thin} /> : <span />}
       <span className="mrow__smp">{p.sample ?? ""}</span>
-      <b className="mrow__val num">{p.value === null ? "–" : <Num v={p.value} />}</b>
+      <b className="mrow__val num">{p.value === null ? "–" : p.moved === undefined ? <Num v={p.value} /> : <span className="moved moved--on"><Num v={p.value} /></span>}</b>
       {p.rank && (
         <span className={`mrow__rank ${p.kind === "style" ? "is-style" : tone ?? ""}`}>
           {!ranked ? "" : p.kind === "style" ? "Style" : percentilePhrase(p.pct!, "performance")}

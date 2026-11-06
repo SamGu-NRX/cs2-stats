@@ -1,7 +1,7 @@
 // Home: the last match as the hero, form, headline stats with trends, recent matches, highlights
 // from the data (the latest from profile/Highlights.tsx, linking to Profile's full list), and what
 // to work on: Firepower, the focus areas with their tips, the weakest numbers.
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import type { Rating3 } from "../../stats/rating3";
 import type { Query, Rolled } from "../../worker/protocol";
 import { ClutchBadge, Delta, FirstPip, MapThumb, MultiBadge, Num, ScoreCell, SourceBadge } from "../components/bits";
@@ -12,6 +12,8 @@ import { DataTable } from "../components/DataTable";
 import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
 import { hideFile } from "../data/privacy";
+import { Moved } from "../components/Takeover";
+import { credited, moves, useCredit, type CreditField } from "../data/credit";
 import { AgentImg } from "../components/Agent";
 import { attrsOf, clutchRows, unreadOwnFiles, unreadText, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline, type OwnEntry } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
@@ -99,8 +101,9 @@ export function HomeView() {
 
 function LastMatch({ s, list, t }: { s: OwnEntry; list: OwnEntry[]; t: Totals | null }) {
   const v = useMatch(s.file).data;
-  const line = entryLine(s);
-  const avg = t ? lineOf(t.both, t.rating.value) : null;
+  const credit = useCredit();
+  const line = credited(entryLine(s), credit);
+  const avg = t ? credited(lineOf(t.both, t.rating.value), credit) : null;
   const src = sourceOf(s);
   const swing = line.swing;
   const verdict = verdictOf(line.rating, BENCH.rating);
@@ -108,10 +111,10 @@ function LastMatch({ s, list, t }: { s: OwnEntry; list: OwnEntry[]; t: Totals | 
   const other = s.usStartSide === "T" ? "CT" : "T";
   // This match against your average over the filtered matches, the average named beside it ("vs your
   // 99.0"). The tiles below carry the same comparison as a bare delta.
-  const stat = (label: string, value: string, mine: number | null, avgV: number | null | undefined, fmtAvg: (x: number) => string, span: number, fmtD: (x: number) => string, color?: string, tip?: string) => (
+  const stat = (label: string, value: ReactNode, mine: number | null, avgV: number | null | undefined, fmtAvg: (x: number) => string, span: number, fmtD: (x: number) => string, color?: string, tip?: string) => (
     <div className="hero-stat">
       <span className="stat__l">{label}</span>
-      <b className="num" style={color ? { color } : undefined} data-tip={tip}><Num v={value} /></b>
+      <b className="num" style={color ? { color } : undefined} data-tip={tip}>{typeof value === "string" ? <Num v={value} /> : value}</b>
       {mine !== null && avgV !== null && avgV !== undefined && (
         <span className="hero-stat__d"><Delta d={mine - avgV} span={span} fmt={fmtD} /><span className="hero-stat__vs">vs your {fmtAvg(avgV)}</span></span>
       )}
@@ -145,10 +148,10 @@ function LastMatch({ s, list, t }: { s: OwnEntry; list: OwnEntry[]; t: Totals | 
             <span className="verdict" data-v={verdict}>{verdict === "good" ? "Good" : verdict === "poor" ? "Poor" : "Average"}</span>
           </div>
           {stat("Swing", fmtSwing(swing), swing === null ? null : 100 * swing, avg?.swing == null ? null : 100 * avg.swing, (x) => fmtSwing(x / 100), 3, (x) => `${x.toFixed(2)}%`, swing === null ? undefined : scoreText(swingScore(swing)), swingSumTip(line.m))}
-          {stat("K–D", `${line.kills}–${line.deaths}`, line.diff, avgDiff, (x) => `${signed(x, 1)} K–D`, 8, (x) => x.toFixed(1))}
-          {stat("ADR", fmtAdr(line.adr), line.adr, avg?.adr, fmtAdr, 20, (x) => x.toFixed(1))}
+          {stat("K–D", <><Moved l={line} f="kills" game={String(line.game.kills)}>{line.kills}</Moved>–<Moved l={line} f="deaths" game={String(line.game.deaths)}>{line.deaths}</Moved></>, line.diff, avgDiff, (x) => `${signed(x, 1)} K–D`, 8, (x) => x.toFixed(1))}
+          {stat("ADR", <Moved l={line} f="adr" game={fmtAdr(line.game.adr)}>{fmtAdr(line.adr)}</Moved>, line.adr, avg?.adr, fmtAdr, 20, (x) => x.toFixed(1))}
           {stat("KAST", fmtPct(line.kast), line.kast, avg?.kast, (x) => fmtPct(x), 10, (x) => `${x.toFixed(1)}%`)}
-          {stat("HS%", fmtPct(line.hs), line.hs, avg?.hs, (x) => fmtPct(x), 15, (x) => `${x.toFixed(1)}%`)}
+          {stat("HS%", <Moved l={line} f="hs" game={fmtPct(line.game.hs)}><Num v={fmtPct(line.hs)} /></Moved>, line.hs, avg?.hs, (x) => fmtPct(x), 15, (x) => `${x.toFixed(1)}%`)}
         </div>
         {v && <div className="hero__rail"><RoundRail v={v} compact selected={null} onPick={(number) => openMatch(matchHref(s.file, "rounds", { round: number }))} /></div>}
         <div className="hero__actions">
@@ -197,23 +200,33 @@ function FormCard({ list }: { list: OwnEntry[] }) {
 
 // ---------------------------------------------------------------- tiles
 
+/** The tiles whose value the takeover credit can change, by metric id. */
+const TILE_FIELD: Partial<Record<string, CreditField>> = { kpr: "kpr", adr: "adr", hs: "hs" };
+
 function Tiles({ list, t }: { list: OwnEntry[]; t: Totals | null }) {
+  const credit = useCredit();
+  const line = t ? credited(lineOf(t.both, t.rating.value), credit) : null;
   const aimMatches = list.filter((e) => e.hasAim).length;
   const visibility = list.some((e) => e.match.visibility === "ok");
   return (
     <div className="tiles" role="list" aria-label="Headline stats">
       {TILES.filter((m) => !m.visibility || visibility).map((m) => {
-        const value = tileValue(m, t?.both.v ?? null, t?.rating.value ?? null);
-        const series = seriesOf(m, list.slice(0, 10));
+        const value = tileValue(m, line?.v ?? null, t?.rating.value ?? null);
+        // the verdict reads the game's figure: benchmarks are measured on the game's credit (shared.tsx StatTile judgedBy)
+        const game = tileValue(m, line?.game.v ?? null, t?.rating.value ?? null);
+        const series = seriesOf(m, list.slice(0, 10), credit);
+        const field = TILE_FIELD[m.id];
+        const mark = line && field ? (n: ReactNode) => <Moved l={line} f={field} game={fmtMetric(m.id, line.game.v[m.id] ?? null)}>{n}</Moved> : undefined;
+        const judgedBy = line?.moved && field && moves(line, field) && game !== null ? m.fmt(game) : undefined;
         const noAim = !!m.aim && !aimMatches;
         // the last match against the value over the filter, as the hero compares them; none when either is missing
-        const d = noAim ? null : tileDelta(m, list[0] ?? null, value);
+        const d = noAim ? null : tileDelta(m, list[0] ?? null, value, credit);
         const breakdown = m.id === "rating3" ? () => {
           const r = t?.rating;
           return r?.inputs && r.terms && r.base !== null ? <RatingTerms rating={{ inputs: r.inputs, base: r.base, terms: r.terms }} /> : null;
         } : m.id === "kast" ? () => (t ? <KastSplit s={t.both} /> : null) : m.id === "adr" || m.id === "kpr" ? () => {
           if (!t) return null;
-          const f = (s: Rolled) => fmtMetric(m.id, s.v[m.id]);
+          const f = (s: Rolled) => fmtMetric(m.id, credited(lineOf(s, null), credit).v[m.id] ?? null);
           return <BreakRows rows={[{ label: <span className="t-text">T side</span>, value: f(t.t) }, { label: <span className="ct-text">CT side</span>, value: f(t.ct) }, { label: "Rounds", value: `${t.t.m.rounds} T, ${t.ct.m.rounds} CT` }]} />;
         } : m.aim && aimMatches ? () => <p className="meta">From {plural(aimMatches, "recorded match", "recorded matches")}.</p> : undefined;
         return (
@@ -221,7 +234,9 @@ function Tiles({ list, t }: { list: OwnEntry[]; t: Totals | null }) {
             <StatTile
               label={m.label}
               value={noAim || value === null ? "–" : m.fmt(value)}
-              raw={value}
+              raw={game}
+              judgedBy={judgedBy}
+              mark={mark}
               bench={m.bench}
               def={metric(m.id).def}
               spark={series.map((x) => x.v)}
@@ -273,7 +288,8 @@ function KastSplit({ s }: { s: Rolled }) {
 
 function RecentMatches({ list }: { list: OwnEntry[] }) {
   const rows = list.slice(0, 8);
-  const lines = useMemo(() => new Map(rows.map((s) => [s.file, entryLine(s)])), [list]); // eslint-disable-line react-hooks/exhaustive-deps
+  const credit = useCredit();
+  const lines = useMemo(() => new Map(rows.map((s) => [s.file, credited(entryLine(s), credit)])), [list, credit]); // eslint-disable-line react-hooks/exhaustive-deps
   const line = (s: OwnEntry) => lines.get(s.file)!;
   return (
     <Card title="Recent matches" aside={<a href={pageHref("matches")} className="link">All {plural(list.length, "match", "matches")} <ChevronRightIcon size={12} /></a>} flush>
@@ -287,8 +303,8 @@ function RecentMatches({ list }: { list: OwnEntry[] }) {
         columns={[
           { key: "map", label: "Map", align: "l", sort: (s) => s.match.map, render: (s) => <span className="mapcell" data-file={matchKey(s.file)}><MapThumb map={s.match.map} size={24} /><span className="two"><b>{mapName(s.match.map)}</b><small>{fmtMatchDay(s.match)}</small></span></span> },
           { key: "score", label: "Score", align: "l", sort: (s) => s.score.us - s.score.them, render: (s) => <ScoreCell us={s.score.us} them={s.score.them} result={s.result} /> },
-          { key: "kd", label: "K–D", sort: (s) => line(s).diff, render: (s) => <span className="num">{line(s).kills}–{line(s).deaths}</span> },
-          { key: "adr", label: "ADR", sort: (s) => line(s).adr, render: (s) => fmtAdr(line(s).adr) },
+          { key: "kd", label: "K–D", sort: (s) => line(s).diff, render: (s) => <span className="num"><Moved l={line(s)} f="kills" game={String(line(s).game.kills)}>{line(s).kills}</Moved>–<Moved l={line(s)} f="deaths" game={String(line(s).game.deaths)}>{line(s).deaths}</Moved></span> },
+          { key: "adr", label: "ADR", sort: (s) => line(s).adr, render: (s) => <Moved l={line(s)} f="adr" game={fmtAdr(line(s).game.adr)}>{fmtAdr(line(s).adr)}</Moved> },
           { key: "swing", label: "Swing", colored: true, sort: (s) => line(s).swing, render: (s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }} data-tip={swingSumTip(s.line.m)}>{fmtSwing(x)}</span>; } },
           { key: "rating", label: "Rating", colored: true, sort: (s) => entryRating(s), render: (s) => <b style={{ color: ratingText(entryRating(s)) }}>{fmtRating(entryRating(s))}</b> },
         ]}

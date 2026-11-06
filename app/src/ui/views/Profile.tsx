@@ -24,17 +24,19 @@ import { rovingIndex, Segmented, Select, type Option } from "../components/contr
 import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
+import { CreditedRate, Moved, TakeoverSwitch } from "../components/Takeover";
+import { credited, hasTakeover, moves, useCredit, type Credit } from "../data/credit";
 import {
   botIds, opponentIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
   rankText, thinPoolText,
-  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type BotPool, type OwnEntry, type SideKey,
+  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type BotPool, type OwnEntry, type SideKey, type Sub,
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
 import { PANEL_TIP, tipOf } from "../data/tips";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
-import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
+import type { AttributeBlock, ClutchRow, Line, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, ordinal, plural } from "../lib/format";
 import { ratingText } from "../lib/scale";
 import { BENCH, benchAround, VERDICT_LABEL, verdictOf, type Bench } from "../lib/verdict";
@@ -140,10 +142,19 @@ function ProfileTabs({ tab, meta, children }: { tab: ProfileTab; meta: string; c
   );
 }
 
+/**
+ * The Duels tab's kills and deaths, a direct count, so it takes the takeover credit. Under "You" it
+ * says so, since the Duels rows beside it are pro comparisons on the game's credit.
+ */
+export function duelsMeta(you: Pick<Line, "m" | "v">, credit: Credit): string {
+  const l = credited(lineOf(you, null), credit);
+  return `${plural(l.kills, "kill")}, ${plural(l.deaths, "death")}${l.moved ? ", with takeover play" : ""}`;
+}
+
 /** The sample each tab rests on, for the tab bar's right side. */
-function tabMeta(tab: ProfileTab, p: ProfileData, side: SideKey): string {
+function tabMeta(tab: ProfileTab, p: ProfileData, side: SideKey, credit: Credit): string {
   const m = p.you.m;
-  if (tab === "duels") return `${plural(m.kills, "kill")}, ${plural(m.deaths, "death")}`;
+  if (tab === "duels") return duelsMeta(p.you, credit);
   if (tab === "playstyle") return side === "both" ? `${plural(p.t.m.rounds, "T round")}, ${plural(p.ct.m.rounds, "CT round")}` : plural(m.rounds, `${side.toUpperCase()} round`);
   return `${plural(p.list.length, "match", "matches")}, ${plural(m.rounds, "round")}`;
 }
@@ -177,6 +188,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
   const { map, n, side } = useScope();
   const r = useRoute();
   const [cmp, setCmp] = useState<Compare>(() => COMPARES.find((c) => c === r.query.get("cmp")) ?? "bench");
+  const credit = useCredit();
   const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const bots = useMemo(() => botIds(list), [list]);
   const opponents = useMemo(() => opponentIds(list), [list]);
@@ -227,7 +239,8 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
         <div className="profile__top psec" id="card" ref={cardRef}>
           <PlayerCard p={p} side={side} cmp={cmp} />
         </div>
-        <ProfileTabs tab={tab} meta={tabMeta(tab, p, side)}>
+        <ProfileTabs tab={tab} meta={tabMeta(tab, p, side, credit)}>
+          {p.list.some((e) => hasTakeover(e.line.m)) && <TakeoverSwitch />}
           {/* what the player card's verdicts measure against; the card is on every tab, so is this */}
           <Select label="Compared to" prefix="Compared to" value={cmp} onChange={(v) => { setCmp(v); setQuery("cmp", v === "bench" ? null : v); }}
             options={[
@@ -328,7 +341,16 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
 
 /** One hero stat; `metric` is its id in the engine, for its tooltip and its pro percentile. */
 /** One hero stat; `bench` is null when the chosen population has no value for it yet (loading, failed or none), so no verdict is drawn. */
-interface CellDef { id: string; metric: string; label: string; bench: Bench | null; value: number | null; text: string }
+interface CellDef {
+  id: string; metric: string; label: string; bench: Bench | null; value: number | null; text: string;
+  /**
+   * The figure the verdict reads: the game's. Benchmarks, bots, opponents and pros are all measured on
+   * the game's credit, so a figure the takeover credit moved is judged by the game's figure.
+   */
+  judged: number | null;
+  /** the takeover credit's change to it (data/credit.ts): the game's figure, or null when it did not move */
+  game?: string | null;
+}
 
 /**
  * A side's role for the card's pip (role-decision.ts's rule): the gated primary with its share, else
@@ -350,8 +372,12 @@ function topRole(b: RoleBlend | undefined): { role: string; share: number | null
  */
 function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Compare }) {
   const key = ratingKey(side);
-  const line = lineOf(p.you, p.ratings[key].value);
+  const credit = useCredit();
+  const line = credited(lineOf(p.you, p.ratings[key].value), credit);
+  // the bots on the game's credit, as every verdict is (CellDef.judged)
   const botLine = p.bots && p.botRatings ? lineOf(p.bots, p.botRatings[key].value) : null;
+  /** the game's figure when the credit moved this one, else null */
+  const gameOf = (f: "adr" | "kpr" | "dpr", fmt: (v: number | null) => string) => (line.moved && moves(line, f) ? fmt(line.game[f]) : null);
   // the players you faced on the page's side, each over the matches you faced them in (worker opponents)
   const sideQ = useMemo(() => ({ files: p.base.files, filter: { ...p.base.filter, ...sidesOf(side) } }), [p.base, side]);
   const oppCall = useCall("opponents", cmp === "opponents" ? [sideQ] : null);
@@ -375,12 +401,12 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
     : "The bots you played have no value for this.";
   const swingPct = line.swing === null ? null : 100 * line.swing;
   const cells: CellDef[] = [
-    { id: "swing", metric: "swing", label: "Round swing", bench: bench(BENCH.swing, "swing", botLine?.swing === null || !botLine ? null : 100 * botLine.swing!), value: swingPct, text: fmtSwing(line.swing) },
-    { id: "dpr", metric: "dpr", label: "Deaths per round", bench: bench(BENCH.dpr, "dpr", botLine?.dpr), value: line.dpr, text: fmtDec(line.dpr) },
-    { id: "kast", metric: "kast", label: "KAST", bench: bench(BENCH.kast, "kast", botLine?.kast), value: line.kast, text: line.kast === null ? "–" : `${line.kast.toFixed(1)}%` },
-    { id: "multi", metric: "mk", label: "Multi-kill rounds", bench: bench(BENCH.multi, "mk", botLine?.mk), value: line.mk, text: line.mk === null ? "–" : `${line.mk.toFixed(1)}%` },
-    { id: "adr", metric: "adr", label: "ADR", bench: bench(BENCH.adr, "adr", botLine?.adr), value: line.adr, text: fmtAdr(line.adr) },
-    { id: "kpr", metric: "kpr", label: "Kills per round", bench: bench(BENCH.kpr, "kpr", botLine?.kpr), value: line.kpr, text: fmtDec(line.kpr) },
+    { id: "swing", metric: "swing", label: "Round swing", bench: bench(BENCH.swing, "swing", botLine?.swing === null || !botLine ? null : 100 * botLine.swing!), value: swingPct, judged: swingPct, text: fmtSwing(line.swing) },
+    { id: "dpr", metric: "dpr", label: "Deaths per round", bench: bench(BENCH.dpr, "dpr", botLine?.dpr), value: line.dpr, judged: line.game.dpr, text: fmtDec(line.dpr), game: gameOf("dpr", fmtDec) },
+    { id: "kast", metric: "kast", label: "KAST", bench: bench(BENCH.kast, "kast", botLine?.kast), value: line.kast, judged: line.kast, text: line.kast === null ? "–" : `${line.kast.toFixed(1)}%` },
+    { id: "multi", metric: "mk", label: "Multi-kill rounds", bench: bench(BENCH.multi, "mk", botLine?.mk), value: line.mk, judged: line.mk, text: line.mk === null ? "–" : `${line.mk.toFixed(1)}%` },
+    { id: "adr", metric: "adr", label: "ADR", bench: bench(BENCH.adr, "adr", botLine?.adr), value: line.adr, judged: line.game.adr, text: fmtAdr(line.adr), game: gameOf("adr", fmtAdr) },
+    { id: "kpr", metric: "kpr", label: "Kills per round", bench: bench(BENCH.kpr, "kpr", botLine?.kpr), value: line.kpr, judged: line.game.kpr, text: fmtDec(line.kpr), game: gameOf("kpr", fmtDec) },
   ];
   // One rating definition (rating3.ts rating3Of): each side rated over its rated rounds, a side under
   // half rated left out, the total weighted by rated rounds, so it lies between the rated sides.
@@ -399,10 +425,12 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   const cellTip = (c: CellDef) => {
     const pct = pros?.p[c.metric];
     const rank = pct && pct.pct !== null && !pct.reason ? `${rankText(pct.pct)} of ${proPoolName(pros!.role)}.` : null;
-    const v = c.bench ? verdictOf(c.value, c.bench) : "na";
+    const v = c.bench ? verdictOf(c.judged, c.bench) : "na";
     const o = cmp === "opponents" ? opp.get(c.metric) : undefined;
     const field = o && o.rank !== null && o.opponents !== null ? `${ordinal(o.rank)} of ${o.of}; they average ${o.id === "swing" ? fmtSwing(o.opponents / 100) : fmtMetric(o.id, o.opponents)}.` : null;
     const verdict = !c.bench ? noRef : v === "na" ? null : `${VERDICT_LABEL[v]} against ${against}.`;
+    // a pro rank is of the game's figure, so a figure the takeover credit moved shows none
+    if (c.game) return [`Includes your play in bots you took over; the game's count is ${c.game}. The verdict and pro ranks use the game's count.`, verdict, field, tipOf(c.metric)].filter(Boolean).join("\n");
     return [rank, verdict, field, tipOf(c.metric)].filter(Boolean).join("\n");
   };
   const sides = [{ s: "T", r: topRole(roles?.T), rounds: roles?.T.rounds }, { s: "CT", r: topRole(roles?.CT), rounds: roles?.CT.rounds }] as const;
@@ -454,10 +482,11 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
       <ul className="pcard__tiles">
         {cells.map((c) => {
           const pct = pros?.p[c.metric];
-          const at = pct && pct.pct !== null && !pct.reason ? pct.pct : null;
+          const at = pct && pct.pct !== null && !pct.reason && !c.game ? pct.pct : null;
+          const f = c.id === "adr" || c.id === "kpr" || c.id === "dpr" ? c.id : null;
           return (
             <li key={c.id} className="ptile" tabIndex={0} data-tip={cellTip(c)}>
-              <b className="disp disp--m ptile__v"><Num v={c.text} /></b>
+              <b className="disp disp--m ptile__v">{f ? <Moved l={line} f={f} game={c.game ?? ""} quiet><Num v={c.text} /></Moved> : <Num v={c.text} />}</b>
               <span className="caps ptile__l">{c.label}</span>
               {at === null ? <span className="ptile__none" /> : <Track at={at} tone={`q${quintile(at)}`} />}
             </li>
@@ -624,19 +653,26 @@ function opponentAttribute(ids: string[], rows: VsOpponents[] | null, m: Measure
 const PISTOL_ROWS: [string, string][] = [["rating3", "Rating 3.0"], ["kpr", "Kills per round"], ["killRounds", "Rounds with a kill"]];
 function usePistolGroup(q: Query): PanelGroup | undefined {
   const splits = useCall("buySplits", [q]);
+  const credit = useCredit();
   if (!splits.data) return undefined;
   const s = splits.data.own.pistol;
   const rounds = s?.m.rounds ?? 0;
-  return {
-    label: <><BuyIcon buy="pistol" size={14} beside />Pistol rounds</>,
-    sample: plural(rounds, "round"),
-    n: rounds,
-    rows: PISTOL_ROWS.map(([id, label]) => {
-      const v = s?.v[id] ?? null;
-      const meta = metric(id);
-      return { id: `pistol:${id}`, label, def: `${meta.tip} Pistol rounds only.`, value: v, text: fmtMetric(id, v), score: null, status: meta.status, reason: null };
-    }),
-  };
+  return { label: <><BuyIcon buy="pistol" size={14} beside />Pistol rounds</>, sample: plural(rounds, "round"), n: rounds, rows: pistolRows(s, credit) };
+}
+
+/**
+ * The pistol-round rows over buySplits' own.pistol. They are values, not ranks, so kills per round,
+ * a direct stat, takes the takeover credit and carries the game's figure when it moved (Sub.moved);
+ * the rating and the rounds with a kill are the game's under either credit.
+ */
+export function pistolRows(s: Pick<Line, "m" | "v"> | undefined, credit: Credit): Sub[] {
+  const line = s ? credited(lineOf(s, null), credit) : null;
+  return PISTOL_ROWS.map(([id, label]) => {
+    const v = (id === "kpr" ? line?.kpr : s?.v[id]) ?? null;
+    const meta = metric(id);
+    const moved = id === "kpr" && line?.moved && moves(line, "kpr") ? fmtMetric(id, line.game.kpr) : undefined;
+    return { id: `pistol:${id}`, label, def: `${meta.tip} Pistol rounds only.`, value: v, text: fmtMetric(id, v), score: null, status: meta.status, reason: null, moved };
+  });
 }
 
 // ---------------------------------------------------------------- breakdowns
@@ -654,6 +690,7 @@ function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
     return { map: m, matches: on.length, wins: on.filter((e) => e.result === "W").length, s: sums[i], r: rats[i] };
   }) : [];
   const key = ratingKey(side);
+  const credit = useCredit();
   return (
     <Card title="Maps" tip={PANEL_TIP.maps} collapsible id="profile-maps" flush className="mapscard" aside={<span className="meta">{plural(maps.length, "map")}</span>}>
       <DataTable
@@ -665,7 +702,7 @@ function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
           { key: "map", label: "Map", align: "l", sort: (m) => mapName(m.map), render: (m) => <span className="mapcell"><MapThumb map={m.map} size={22} /><b>{mapName(m.map)}</b></span> },
           { key: "matches", label: "Maps", sort: (m) => m.matches, render: (m) => m.matches },
           { key: "wl", label: "W–L", sort: (m) => m.wins / m.matches, render: (m) => <span className="num">{m.wins}<span className="faint">–</span>{m.matches - m.wins}</span> },
-          { key: "adr", label: "ADR", sort: (m) => m.s.v.adr, render: (m) => fmtAdr(m.s.v.adr) },
+          { key: "adr", label: "ADR", sort: (m) => credited(lineOf(m.s, null), credit).adr, render: (m) => <CreditedRate s={m.s} id="adr" fmt={fmtAdr} /> },
           { key: "kast", label: "KAST", sort: (m) => m.s.v.kast, render: (m) => <Num v={fmtPct(m.s.v.kast)} /> },
           { key: "t", label: "T", tip: "Your rating on T.", colored: true, sort: (m) => m.r.T.value, render: (m) => <span className="t-text">{fmtRating(m.r.T.value)}</span> },
           { key: "ct", label: "CT", tip: "Your rating on CT.", colored: true, sort: (m) => m.r.CT.value, render: (m) => <span className="ct-text">{fmtRating(m.r.CT.value)}</span> },
