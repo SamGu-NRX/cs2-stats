@@ -51,6 +51,8 @@ public sealed class MatchMeta
     public int GrenadeCount, ThrowCount;
     /// <summary>Rounds already in the file (set when decoding). Not written to the file.</summary>
     public int RoundCount;
+    /// <summary>The file's last takeovers row (set when decoding; Ri Nil when there is none), restored by a mid-round resume. Not written to the file.</summary>
+    public TakeoverRow LastTakeover = new() { Ri = Nil.V, Tick = Nil.V, Pi = Nil.V, Body = Nil.V };
 
     /// <summary>Copy that shares no mutable state, for handing between the game thread and the worker.</summary>
     public MatchMeta Clone()
