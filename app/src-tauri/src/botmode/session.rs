@@ -374,6 +374,16 @@ pub fn read_status(layout: &Layout) -> Option<SessionStatus> {
     std::fs::read_to_string(status_path(layout)).ok().and_then(|t| serde_json::from_str(&t).ok())
 }
 
+/// Adds what went wrong after the session itself (the recorded demos' import) to the final status of
+/// `run_id`, best effort, so the app shows it with the session.
+pub fn add_errors(layout: &Layout, run_id: &str, errors: &[String]) {
+    let Some(mut s) = read_status(layout).filter(|s| s.run_id == run_id) else { return };
+    s.errors.extend(errors.iter().cloned());
+    if let Ok(text) = serde_json::to_string_pretty(&s) {
+        let _ = changes::write_atomic(&status_path(layout), text.as_bytes());
+    }
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }

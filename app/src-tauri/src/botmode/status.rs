@@ -257,7 +257,7 @@ pub fn status(
         }
     }
     let app = settings::load_app(layout)?;
-    let recording = crate::demos::recording(&app, crate::demos::launch_free(layout), steam_launch_options.as_deref());
+    let recording = crate::demos::recording(&app, crate::demos::launch_free(layout), steam_launch_options.as_deref().ok_or("Steam's settings for CS2 were not found"));
     let (difficulty, active_profile) = settings::active_profile(&layout.csgo)?;
     Ok(Status {
         csgo: layout.csgo.display().to_string(),

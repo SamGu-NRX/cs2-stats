@@ -1228,6 +1228,35 @@ describe("recording demos", () => {
     expect(text(".bm-rec [role='alert']")).toBe(why);
   });
 
+  it("Launch waits while a change to the recording setting saves, and goes once it has", async () => {
+    // fails if the launch can open while the save is in flight: its dialog would show the setting
+    // the backend had before the change
+    await render("installed");
+    let done = () => {};
+    mockIPC((cmd, args) => {
+      calls.push([cmd, (args ?? {}) as Record<string, unknown>]);
+      if (cmd === "botmode_set_recording") return new Promise((r) => { done = () => r(backend(cmd, args as Record<string, unknown>)); });
+      return backend(cmd, args as Record<string, unknown>);
+    });
+    await click(recordSwitch());
+    expect(button("Launch Bot Mode…").disabled).toBe(true);
+    expect(text("#bm-launch-why")).toBe("Saving the recording setting; Launch waits until then.");
+    await act(async () => { done(); });
+    await settle();
+    expect(button("Launch Bot Mode…").disabled).toBe(false);
+  });
+
+  it("hides a folder named in a recording error while personal info is hidden", async () => {
+    // fails if the switch shows the backend's reason as it came: it can name a folder in the user's profile
+    // built from parts, as privacy.test.tsx does, so the public-tree check sees no developer path
+    const why = `${["C:", "Users", "SENTINEL_USER", "AppData", "Roaming", "BotMatchStats", "botmode", "settings.json"].join("\\")}: access denied`;
+    await render("installed", { botmode_set_recording: why });
+    act(() => { setHidePersonal(true); });
+    await click(recordSwitch());
+    expect(text(".bm-rec [role='alert']")).toContain("access denied");
+    expect(text(".bm-rec [role='alert']")).not.toContain("SENTINEL_USER");
+  });
+
   it("a disk under the floor: the launch goes without the tokens, and the switch and the dialog say why", async () => {
     await render("low-disk");
     const why = "Recording off this time: 9.4 GB free, floor 10 GB.";

@@ -114,10 +114,16 @@ fn supervise_session(a: &Args, ctx: &Ctx, probe: &SystemProbe) -> i32 {
     let run_id = a.run.clone().unwrap_or_else(session::new_run_id);
     let steam = ctx.steam_config();
     let status = session::supervise_session(&ctx.layout, probe, &monitor::Windows, steam.as_ref().ok(), mode, &run_id, &launch::spawn_steam);
+    // the session's recording window closes now, whatever its outcome
+    let ended = crate::demos::end_session(&ctx.layout);
+    let mut problems: Vec<String> = ended.err().map(|e| format!("The end of the recording session was not recorded: {e}")).into_iter().collect();
     // CS2 has exited and the lease is free: take, extract and sweep the demos the session recorded.
-    // The take checks again that CS2 is closed. Its outcome is in the store's sidecars and ledger.
+    // The take checks again that CS2 is closed; what went wrong goes into the ledger and the status.
     if matches!(status.outcome, Some(monitor::Outcome::Exited { .. })) {
-        let _ = crate::demos::run_import(&ctx.layout, probe, &|_| {});
+        problems.extend(crate::demos::import_after_session(probe, &|d| std::thread::sleep(d), &|| crate::demos::run_import(&ctx.layout, probe, &|_| {})));
+    }
+    if !problems.is_empty() {
+        session::add_errors(&ctx.layout, &run_id, &problems);
     }
     if status.state == "done" && status.left_on.is_none() {
         0
@@ -322,9 +328,8 @@ fn run(a: Args) -> Result<(), String> {
             print(a.json, &m, meta_line);
         }
         ["set", "launch-options", options] => {
-            let mut s = settings::load_app(layout)?;
-            s.launch_options = options.to_string();
-            settings::save_app(layout, &s)?;
+            // read and written under one lock, so a recording or limits change made meanwhile stays
+            settings::set_launch_options(layout, options, None)?;
             println!("Bot Mode will start CS2 with: -insecure {options}");
         }
         _ => return Err(format!("unknown command: {}\n\n{USAGE}", words.join(" "))),

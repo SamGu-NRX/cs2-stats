@@ -1451,14 +1451,18 @@ pub fn set_recording(layout: &Layout, on: bool, seen: Option<bool>) -> Result<Ap
     })
 }
 
-/// Sets the cap, floor and keep-last, refused when they are no longer `seen`. The cap must be at
-/// least 1 GB, the floor at least 0, and keep-last at most 1000.
+/// The largest cap or floor, in GB. Ours: far above any disk this runs on, and small enough that a
+/// limit plus the launch reserve stays a sane number of bytes.
+pub const MAX_LIMIT_GB: f64 = 10_000.0;
+
+/// Sets the cap, floor and keep-last, refused when they are no longer `seen`. The cap must be 1 to
+/// MAX_LIMIT_GB, the floor 0 to MAX_LIMIT_GB, and keep-last at most 1000.
 pub fn set_demo_policy(layout: &Layout, p: DemoPolicy, seen: Option<DemoPolicy>) -> Result<AppSettings, String> {
-    if !(p.cap_gb.is_finite() && p.cap_gb >= 1.0) {
-        return Err(format!("a cap of {} GB is not allowed; it must be at least 1 GB", p.cap_gb));
+    if !(p.cap_gb.is_finite() && (1.0..=MAX_LIMIT_GB).contains(&p.cap_gb)) {
+        return Err(format!("a cap of {} GB is not allowed; it must be 1 to {MAX_LIMIT_GB} GB", p.cap_gb));
     }
-    if !(p.floor_gb.is_finite() && p.floor_gb >= 0.0) {
-        return Err(format!("a floor of {} GB is not allowed; it must be 0 or more", p.floor_gb));
+    if !(p.floor_gb.is_finite() && (0.0..=MAX_LIMIT_GB).contains(&p.floor_gb)) {
+        return Err(format!("a floor of {} GB is not allowed; it must be 0 to {MAX_LIMIT_GB} GB", p.floor_gb));
     }
     if p.keep_last > 1000 {
         return Err(format!("keeping the last {} is not allowed; at most 1000", p.keep_last));
@@ -1470,13 +1474,6 @@ pub fn set_demo_policy(layout: &Layout, p: DemoPolicy, seen: Option<DemoPolicy>)
         (s.demo_cap_gb, s.demo_floor_gb, s.demo_keep_last) = (p.cap_gb, p.floor_gb, p.keep_last);
         Ok(())
     })
-}
-
-pub fn save_app(layout: &Layout, s: &AppSettings) -> Result<(), String> {
-    super::launch::steam_args(&s.launch_options)?;
-    let _lock = OpLock::acquire(layout)?;
-    let text = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
-    write_atomic(&layout.settings_file(), text.as_bytes())
 }
 
 #[cfg(test)]

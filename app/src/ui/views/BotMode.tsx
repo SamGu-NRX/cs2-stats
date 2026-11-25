@@ -178,6 +178,7 @@ function BotMode({ api }: { api: BotModeApi }) {
 
 function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof useBotMode>; status: Status }) {
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const shown = useShown();
   /** builds the last install replaced, until they are applied again: an install never removes them silently */
   const [replaced, setReplaced] = useState<string[]>([]);
   const { pending, keptUnread } = usePendingOrNull(api, status, bm.server, bm.reload);
@@ -294,7 +295,7 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
             <dt>Records</dt>
             <dd>{status.recording.tokens.length > 0
               ? <>This match, with GOTV, into CS2's <span className="mono">replays</span> folder. When CS2 exits, the app moves the demo into its own demos folder and reads it.</>
-              : status.recording.on && status.recording.blocked ? status.recording.blocked
+              : status.recording.on && status.recording.blocked ? shown(status.recording.blocked)
               : "Nothing: recording demos is off."}</dd>
           </dl>
           {pending && pending.changed.length > 0 && <>
@@ -342,7 +343,10 @@ function Hero({ api, reload, status, session, running, state, blocker, checking,
   // unbound unknown: a key the knife left would spawn knives again, so Launch waits, as the
   // backend's launch does (settings.rs check_knife_file)
   const knife = pending && knifeBlocksLaunch(pending.knifeFile) ? knifeProblem(pending.knifeFile) : null;
-  const launchWhy = state.kind === "missing" ? "Install the mod first." : cfgUnread ?? (knife ? `${knife} Launch waits until then.` : pending?.invalid ?? blocker);
+  // the launch reads the recording setting the backend has saved; while a change to it saves, the
+  // dialog would show the old one, so Launch waits for the save
+  const [recSaving, setRecSaving] = useState(false);
+  const launchWhy = state.kind === "missing" ? "Install the mod first." : cfgUnread ?? (knife ? `${knife} Launch waits until then.` : pending?.invalid ?? blocker ?? (recSaving ? "Saving the recording setting; Launch waits until then." : null));
   const vac = vacState(status, running, supervised);
   // the interrupted change has its own sentence and button above; its warning would repeat it
   const warnings = status.warnings.filter((w) => !status.unfinished || !w.startsWith(`Change ${status.unfinished.id} `));
@@ -392,7 +396,7 @@ function Hero({ api, reload, status, session, running, state, blocker, checking,
           </button>
         </div>
       )}
-      {!status.unfinished && !recovery && <RecordSwitch api={api} status={status} reload={reload} />}
+      {!status.unfinished && !recovery && <RecordSwitch api={api} status={status} reload={reload} onSaving={setRecSaving} />}
       {launchWhy && !status.unfinished && (
         <p className="meta bm-hero__why" id="bm-launch-why">
           {shown(launchWhy)}
@@ -416,8 +420,10 @@ function Hero({ api, reload, status, session, running, state, blocker, checking,
  * it back and says why. With recording on, a disk under the floor turns it off for this launch only,
  * and the reason shows here as it does in the launch dialog.
  */
-function RecordSwitch({ api, status, reload }: { api: BotModeApi; status: Status; reload: () => Promise<void> }) {
+function RecordSwitch({ api, status, reload, onSaving }: { api: BotModeApi; status: Status; reload: () => Promise<void>; onSaving: (saving: boolean) => void }) {
   const r = status.recording;
+  // a reason can name a folder (free space that could not be read), so it is hidden like any path
+  const shown = useShown();
   const [want, setWant] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   // the next status read carries the saved value; until then the switch shows the one asked for
@@ -425,12 +431,15 @@ function RecordSwitch({ api, status, reload }: { api: BotModeApi; status: Status
   const toggle = async (on: boolean) => {
     setWant(on);
     setError(null);
+    onSaving(true);
     try {
       await api.setRecording(on, r.on);
       await reload();
     } catch (e) {
       setWant(null);
       setError(errorText(e));
+    } finally {
+      onSaving(false);
     }
   };
   return (
@@ -440,10 +449,10 @@ function RecordSwitch({ api, status, reload }: { api: BotModeApi; status: Status
       </Switch>
       <p className="meta bm-rec__what" id="bm-rec-what">
         {r.on && r.blocked
-          ? <span className="bm-rec__off">{r.blocked}</span>
+          ? <span className="bm-rec__off">{shown(r.blocked)}</span>
           : "Each match is about 100 MB. Demos stay while they have clips worth rendering, then go."}
       </p>
-      {error && <p className="bm-problem selectable" role="alert">{error}</p>}
+      {error && <p className="bm-problem selectable" role="alert">{shown(error)}</p>}
     </div>
   );
 }

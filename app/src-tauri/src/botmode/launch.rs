@@ -86,14 +86,23 @@ pub struct LaunchPlan {
 fn pre_launch(layout: &Layout, lock: &OpLock, app: &settings::AppSettings, steam_options: &str) -> crate::demos::Recording {
     use crate::demos;
     if !app.record_demos || demos::steam_conflict(steam_options).is_some() {
-        return demos::recording(app, Ok(0), Some(steam_options));
+        return demos::recording(app, Ok(0), Ok(steam_options));
     }
     let swept = demos::Store::of(layout).and_then(|store| {
         demos::sweep(&store, lock, &demos::Policy::of(app), None, demos::RESERVE, demos::game_build(layout).as_deref(), None)
     });
-    match swept {
-        Ok(_) => demos::recording(app, demos::launch_free(layout), Some(steam_options)),
-        Err(e) => demos::recording(app, Err(format!("the demos folder could not be swept: {e}")), Some(steam_options)),
+    let r = match swept {
+        Ok(_) => demos::recording(app, demos::launch_free(layout), Ok(steam_options)),
+        Err(e) => demos::recording(app, Err(format!("the demos folder could not be swept: {e}")), Ok(steam_options)),
+    };
+    if r.tokens.is_empty() {
+        return r;
+    }
+    // the session window is what lets the take tell this match's demo from the user's own; without
+    // it the demo would never be taken, so this launch does not record
+    match demos::Store::of(layout).and_then(|store| demos::session_started(&store, lock, std::time::SystemTime::now())) {
+        Ok(()) => r,
+        Err(e) => demos::recording(app, Err(format!("the demos folder could not record the session: {e}")), Ok(steam_options)),
     }
 }
 

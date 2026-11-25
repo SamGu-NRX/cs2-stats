@@ -106,6 +106,40 @@ pub struct Store {
 
 const LEDGER: &str = "ledger.jsonl";
 const KEEPS: &str = "keeps.json";
+const SESSIONS: &str = "sessions.json";
+
+/// A Bot Mode launch that added the recording tokens, in Unix seconds: when it was prepared, and
+/// when its supervisor saw the session end (None until then). Only a demo CS2 began writing inside
+/// one of these is the app's to take; any other `auto-*.dem` in `replays\` is the user's own.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Session {
+    pub start: u64,
+    pub end: Option<u64>,
+}
+
+/// How far outside a session a demo's creation time may fall and still be the session's. Ours, no
+/// measurement: the demo is created when the map loads, well after the launch is prepared, so the
+/// margin covers clock rounding and a session end recorded a little early, not a known delay.
+pub const SESSION_MARGIN: u64 = 120;
+/// An open session (its supervisor died before it could record the end) lasts until the next
+/// session starts, or at most this long. Ours, no measurement: longer than any Bot Mode evening, short
+/// enough that a demo the user records days later is not taken for it.
+pub const OPEN_SESSION: u64 = 12 * 3600;
+
+/// Whether a demo created at `t` (Unix seconds) was recorded during one of `sessions`.
+pub fn in_session(sessions: &[Session], t: u64) -> bool {
+    let mut starts: Vec<u64> = sessions.iter().map(|s| s.start).collect();
+    starts.sort_unstable();
+    sessions.iter().any(|s| {
+        let next = starts.iter().copied().find(|&x| x > s.start).unwrap_or(u64::MAX);
+        let end = s.end.unwrap_or_else(|| next.min(s.start.saturating_add(OPEN_SESSION)));
+        s.start.saturating_sub(SESSION_MARGIN) <= t && t <= end.saturating_add(SESSION_MARGIN)
+    })
+}
+
+fn unix(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
 
 impl Store {
     /// `demos\` beside the Bot Mode folder: `%APPDATA%\BotMatchStats\demos`.
@@ -168,7 +202,12 @@ impl Store {
         }
         let name = meta_name(id);
         let bytes = self.dir()?.map(|d| d.read(&name)).transpose()?.flatten().ok_or_else(|| format!("{name}: not in the demos folder"))?;
-        serde_json::from_slice(&bytes).map_err(|e| format!("{name}: {e}"))
+        let m: Meta = serde_json::from_slice(&bytes).map_err(|e| format!("{name}: {e}"))?;
+        // the file name is the id every delete uses; a sidecar naming another demo is not trusted
+        if m.id != id {
+            return Err(format!("{name} names another demo, {}; it is not read", m.id));
+        }
+        Ok(m)
     }
 
     fn write_meta(&self, m: &Meta) -> Result<(), String> {
@@ -233,6 +272,54 @@ impl Store {
         let text = serde_json::to_string(keeps).map_err(|e| e.to_string())?;
         self.ensure()?.write_atomic(KEEPS, text.as_bytes())
     }
+
+    /// The Bot Mode sessions that recorded, oldest first.
+    pub fn sessions(&self) -> Result<Vec<Session>, String> {
+        match self.dir()?.map(|d| d.read(SESSIONS)).transpose()?.flatten() {
+            Some(t) => serde_json::from_slice(&t).map_err(|e| format!("{SESSIONS}: {e}")),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn set_sessions(&self, sessions: &[Session]) -> Result<(), String> {
+        let text = serde_json::to_string(sessions).map_err(|e| e.to_string())?;
+        self.ensure()?.write_atomic(SESSIONS, text.as_bytes())
+    }
+}
+
+/// Records that a launch about to start CS2 records the match (it added [`TOKENS`]), from `at`.
+pub fn session_started(store: &Store, _lock: &OpLock, at: SystemTime) -> Result<(), String> {
+    let mut all = store.sessions()?;
+    all.push(Session { start: unix(at), end: None });
+    store.set_sessions(&all)
+}
+
+/// Records that the newest open session ended at `at`; nothing when none is open.
+pub fn session_ended(store: &Store, _lock: &OpLock, at: SystemTime) -> Result<(), String> {
+    let mut all = store.sessions()?;
+    let Some(open) = all.iter_mut().rev().find(|s| s.end.is_none()) else { return Ok(()) };
+    open.end = Some(unix(at).max(open.start));
+    store.set_sessions(&all)
+}
+
+/// The supervisor's end of a session: [`session_ended`] now, with the operation lock waited for up to
+/// five seconds, as an import waits for it.
+pub fn end_session(layout: &Layout) -> Result<(), String> {
+    let store = Store::of(layout)?;
+    let lock = op_lock_soon(layout)?;
+    session_ended(&store, &lock, SystemTime::now())
+}
+
+/// How many `auto-*.dem` in `replays\` were not recorded in a Bot Mode session, and so are left where
+/// they are; None when `replays\` cannot be read. They are counted, never named: the name holds the
+/// Steam name.
+pub fn foreign_demos(layout: &Layout, store: &Store) -> Option<usize> {
+    let sessions = store.sessions().ok()?;
+    let rdir = handle::Dir::open(&layout.csgo.join("replays")).ok()?;
+    let names = rdir.names().ok()?;
+    Some(names.iter().filter(|n| is_auto_demo(n)).filter(|n| {
+        fs::symlink_metadata(rdir.path().join(n)).and_then(|m| m.created()).map_or(true, |c| !in_session(&sessions, unix(c)))
+    }).count())
 }
 
 fn dem_name(id: &str) -> String {
@@ -328,10 +415,13 @@ pub struct Taken {
     pub waiting: usize,
     /// Demos left because they are links, or could not be moved; why.
     pub refused: Vec<String>,
+    /// `auto-*.dem` files not recorded in a Bot Mode session: the user's own, left where they are.
+    pub foreign: usize,
 }
 
-/// Moves every settled `auto-*.dem` in `game\csgo\replays` into the store, with CS2 closed and
-/// the operation lock held. A demo already in the store (the same content under the same id) is
+/// Moves every settled `auto-*.dem` in `game\csgo\replays` that CS2 began writing during a Bot
+/// Mode session that recorded ([`in_session`]) into the store, with CS2 closed and the operation lock
+/// held. Any other `auto-*.dem` is the user's own recording and is not opened, moved or deleted. A demo already in the store (the same content under the same id) is
 /// removed from `replays\`. A sidecar left without its demo stays for [`sweep`] to mark missing.
 ///
 /// Each demo is opened once, shared with no one, and everything happens through that handle: the
@@ -353,9 +443,11 @@ fn take_with(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &O
     let replays = layout.csgo.join("replays");
     let rdir = match handle::Dir::open(&replays) {
         Ok(d) => d,
-        Err(_) if fs::symlink_metadata(&replays).is_err() => return Ok(out),
+        // only a folder that is not there means nothing to take; one that cannot be read is an error
+        Err(_) if fs::symlink_metadata(&replays).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) => return Ok(out),
         Err(e) => return Err(e),
     };
+    let sessions = store.sessions()?;
     let dir = store.ensure()?;
     adopt_orphans(store, dir)?;
     let build = game_build(layout);
@@ -364,6 +456,12 @@ fn take_with(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &O
     for name in names {
         // every message below names the demo by its place in the list, never by its name
         let which = format!("a recorded demo in {}", replays.display());
+        // not one of Bot Mode's: left exactly as it is, unopened
+        let created = fs::symlink_metadata(rdir.path().join(&name)).and_then(|m| m.created());
+        if !created.is_ok_and(|c| in_session(&sessions, unix(c))) {
+            out.foreign += 1;
+            continue;
+        }
         let mut f = match handle::open_exclusive(&rdir.path().join(&name)) {
             Ok(f) => f,
             Err(e) if e.raw_os_error() == Some(handle::SHARING_VIOLATION) => {
@@ -536,9 +634,13 @@ pub struct Policy {
 }
 
 impl Policy {
+    /// Bytes from the settings, each limit held to 0..=MAX_LIMIT_GB, and a limit that is not a number
+    /// read as the default: a settings file edited by hand cannot make a sum with the reserve overflow,
+    /// or a cap of nothing that would evict every demo.
     pub fn of(s: &AppSettings) -> Policy {
-        let bytes = |gb: f64| (gb.max(0.0) * GB as f64) as u64;
-        Policy { cap: bytes(s.demo_cap_gb), floor: bytes(s.demo_floor_gb), keep_last: s.demo_keep_last as usize }
+        let (max, dflt) = (crate::botmode::settings::MAX_LIMIT_GB, AppSettings::default());
+        let bytes = |gb: f64, or: f64| ((if gb.is_nan() { or } else { gb }).clamp(0.0, max) * GB as f64) as u64;
+        Policy { cap: bytes(s.demo_cap_gb, dflt.demo_cap_gb), floor: bytes(s.demo_floor_gb, dflt.demo_floor_gb), keep_last: s.demo_keep_last as usize }
     }
 }
 
@@ -595,7 +697,7 @@ pub fn plan_sweep(demos: &[Meta], keeps: &[Keep], policy: &Policy, free: u64, re
         match reason(m) {
             Some(r) => {
                 plan.kept.insert(m.id.clone(), r);
-                used += m.dem_bytes;
+                used = used.saturating_add(m.dem_bytes);
                 kept.push(m);
             }
             None => {
@@ -609,7 +711,7 @@ pub fn plan_sweep(demos: &[Meta], keeps: &[Keep], policy: &Policy, free: u64, re
     let old_build = |m: &Meta| build.is_some_and(|b| m.game_build.as_deref().is_some_and(|g| g != b));
     let mut order: Vec<&Meta> = kept.into_iter().filter(|m| !protected(m)).collect();
     order.sort_by_key(|m| (!old_build(m), m.created_utc.clone()));
-    let breach = |used: u64, free: u64| (used + reserve > policy.cap, free < policy.floor + reserve);
+    let breach = |used: u64, free: u64| (used.saturating_add(reserve) > policy.cap, free < policy.floor.saturating_add(reserve));
     for m in order {
         let (over_cap, under_floor) = breach(used, free);
         if !over_cap && !under_floor {
@@ -792,23 +894,31 @@ pub fn steam_conflict(steam_options: &str) -> Option<&'static str> {
     })
 }
 
-/// The launch records when the setting is on, Steam's stored launch options (`steam_options`, when
-/// they could be read) do not undo the recording, and the disk has the floor plus [`RESERVE`] free.
-/// Otherwise the launch goes ahead without [`TOKENS`], and `blocked` says why.
-pub fn recording(s: &AppSettings, free: Result<u64, String>, steam_options: Option<&str>) -> Recording {
+/// The launch records when the setting is on, Steam's stored launch options were read and do not
+/// undo the recording, and the disk has the floor plus [`RESERVE`] free. Otherwise the launch goes
+/// ahead without [`TOKENS`], and `blocked` says why. Options that could not be read block it: the
+/// launch itself refuses to start without them (launch.rs check_steam_options).
+pub fn recording(s: &AppSettings, free: Result<u64, String>, steam_options: Result<&str, &str>) -> Recording {
     let floor = Policy::of(s).floor;
     let mut r = Recording { on: s.record_demos, tokens: Vec::new(), blocked: None, free: free.as_ref().ok().copied(), floor };
     if !s.record_demos {
         return r;
     }
-    if let Some(c) = steam_options.and_then(steam_conflict) {
-        r.blocked = Some(format!("Recording off this time: your Steam launch options set {c}."));
-        return r;
+    match steam_options.map(steam_conflict) {
+        Err(why) => {
+            r.blocked = Some(format!("Recording off this time: CS2's launch options in Steam could not be read ({why})."));
+            return r;
+        }
+        Ok(Some(c)) => {
+            r.blocked = Some(format!("Recording off this time: your Steam launch options set {c}."));
+            return r;
+        }
+        Ok(None) => {}
     }
     match free {
         Err(e) => r.blocked = Some(format!("Recording off this time: free space could not be read ({e}).")),
         Ok(f) if f < floor => r.blocked = Some(format!("Recording off this time: {} GB free, floor {} GB.", gb(f), gb(floor))),
-        Ok(f) if f < floor + RESERVE => {
+        Ok(f) if f < floor.saturating_add(RESERVE) => {
             r.blocked = Some(format!("Recording off this time: {} GB free, and a match needs {} GB above the {} GB floor.", gb(f), gb(RESERVE), gb(floor)))
         }
         Ok(_) => r.tokens = TOKENS.map(String::from).to_vec(),
@@ -840,6 +950,9 @@ pub struct DemoStore {
     pub last_failure: Option<Failure>,
     /// Over the cap or under the floor with nothing left a sweep may delete ([`Held`]); None otherwise.
     pub held: Option<Held>,
+    /// `auto-*.dem` files in `replays\` not recorded in a Bot Mode session, left where they are;
+    /// counted, not named. None when the game folder or `replays\` could not be read.
+    pub foreign: Option<usize>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -865,8 +978,8 @@ pub struct Failure {
     pub detail: Option<String>,
 }
 
-/// Reads the store; writes nothing.
-pub fn status(store: &Store, s: &AppSettings) -> Result<DemoStore, String> {
+/// Reads the store; writes nothing. `foreign`: [`foreign_demos`], when the game folder is at hand.
+pub fn status(store: &Store, s: &AppSettings, foreign: Option<usize>) -> Result<DemoStore, String> {
     let p = Policy::of(s);
     let metas = store.metas()?;
     let (free, free_error) = match free_bytes(&store.root) {
@@ -880,6 +993,7 @@ pub fn status(store: &Store, s: &AppSettings) -> Result<DemoStore, String> {
     let held = plan_sweep(&live, &store.keeps()?, &p, free.unwrap_or(u64::MAX), 0, None, None).held;
     Ok(DemoStore {
         held,
+        foreign,
         folder: store.root.display().to_string(),
         used: metas.iter().filter(|m| present(m)).map(|m| m.dem_bytes).sum(),
         cap: p.cap,
@@ -928,7 +1042,7 @@ async fn with_lock(f: impl FnOnce(&crate::botmode::Ctx, &Store, &OpLock) -> Resu
             let lock = OpLock::acquire(&ctx.layout)?;
             f(&ctx, &store, &lock)?;
         }
-        status(&store, &crate::botmode::settings::load_app(&ctx.layout)?)
+        status(&store, &crate::botmode::settings::load_app(&ctx.layout)?, foreign_demos(&ctx.layout, &store))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -938,7 +1052,9 @@ async fn with_lock(f: impl FnOnce(&crate::botmode::Ctx, &Store, &OpLock) -> Resu
 pub async fn demos_status() -> Result<DemoStore, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let (store, s) = app_store()?;
-        status(&store, &s)
+        // the game folder, when Steam has one, counts the user's own demos left in replays\
+        let foreign = crate::botmode::Ctx::new(crate::botmode::Game::Steam, None).ok().and_then(|ctx| foreign_demos(&ctx.layout, &store));
+        status(&store, &s, foreign)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -949,7 +1065,8 @@ pub async fn demos_status() -> Result<DemoStore, String> {
 /// the lock file is opened shared with no one.
 fn set_policy(layout: &Layout, policy: crate::botmode::settings::DemoPolicy, seen: Option<crate::botmode::settings::DemoPolicy>) -> Result<DemoStore, String> {
     let s = crate::botmode::settings::set_demo_policy(layout, policy, seen)?;
-    status(&Store::of(layout)?, &s)
+    let store = Store::of(layout)?;
+    status(&store, &s, foreign_demos(layout, &store))
 }
 
 /// `seen` is the policy the card showed; refused when it has changed since.
@@ -1094,11 +1211,25 @@ fn op_lock_soon(layout: &Layout) -> Result<OpLock, String> {
 /// says why nothing was extracted. Until the app sends its keeps (`demos_sweep`), the sweep keeps
 /// pinned, unextracted, failed-once and the newest demos, under the cap and above the floor.
 pub fn run_import(layout: &Layout, probe: &dyn ProcessProbe, progress: &dyn Fn(serde_json::Value)) -> Result<LocalImport, String> {
-    run_import_with(layout, probe, &|| crate::Extractor::find("local_import.py"), progress)
+    let step = |store: &Store, out: &mut LocalImport| -> Result<Option<String>, String> {
+        let x = crate::Extractor::find("local_import.py")?;
+        let version = x.version()?;
+        Ok(extract(store, layout, &x, &version, progress, out)?.then_some(version))
+    };
+    let r = run_import_with(layout, probe, &step);
+    // an import that stopped is recorded too, so the app can show it later
+    if let (Err(e), Ok(store)) = (&r, Store::of(layout)) {
+        let _ = store.log("import", "import_failed", Some(e));
+    }
+    r
 }
 
-/// [`run_import`] with the importer lookup as a parameter, so a test can run it without one.
-fn run_import_with(layout: &Layout, probe: &dyn ProcessProbe, find: &dyn Fn() -> Result<crate::Extractor, String>, progress: &dyn Fn(serde_json::Value)) -> Result<LocalImport, String> {
+/// The extraction step of an import: Ok(Some(version)) when every demo it ran on has its result
+/// recorded, so a sweep may judge failed demos against that version; Ok(None) when some were not.
+type ExtractStep<'a> = dyn Fn(&Store, &mut LocalImport) -> Result<Option<String>, String> + 'a;
+
+/// [`run_import`] with the extraction step as a parameter, so a test can run it without an importer.
+fn run_import_with(layout: &Layout, probe: &dyn ProcessProbe, step: &ExtractStep) -> Result<LocalImport, String> {
     let _import = ImportLock::acquire(layout)?;
     let store = Store::of(layout)?;
     let take_result = op_lock_soon(layout).and_then(|lock| take(&store, layout, probe, &lock, SystemTime::now()));
@@ -1107,29 +1238,32 @@ fn run_import_with(layout: &Layout, probe: &dyn ProcessProbe, find: &dyn Fn() ->
         Err(e) => (None, Some(e)),
     };
     let mut out = LocalImport { taken, take_error, extracted: Vec::new(), failed: Vec::new(), code: None, error: None };
-    let version = match find().and_then(|x| x.version().map(|v| (x, v))) {
-        Ok((x, version)) => {
-            if let Err(e) = extract(&store, layout, &x, &version, progress, &mut out) {
-                out.error = Some(e);
-            }
-            Some(version)
-        }
+    // the version reaches the sweep only when every demo the run tried has its result recorded: a
+    // failed demo is retried with a newer extractor, and until that retry is recorded it stays protected
+    let version = match step(&store, &mut out) {
+        Ok(v) => v,
         Err(e) => {
             out.error = Some(e);
             None
         }
     };
+    for (what, problem) in [("take", &out.take_error), ("extraction", &out.error)] {
+        if let Some(p) = problem {
+            let _ = store.log("import", "import_failed", Some(&format!("{what}: {p}")));
+        }
+    }
     let lock = op_lock_soon(layout)?;
     let s = crate::botmode::settings::load_app(layout)?;
     sweep(&store, &lock, &Policy::of(&s), None, 0, game_build(layout).as_deref(), version.as_deref())?;
     Ok(out)
 }
 
-/// Runs the importer on the demos [`to_extract`] names and records each one's result.
-fn extract(store: &Store, layout: &Layout, x: &crate::Extractor, version: &str, progress: &dyn Fn(serde_json::Value), out: &mut LocalImport) -> Result<(), String> {
+/// Runs the importer on the demos [`to_extract`] names and records each one's result. True when
+/// every demo it ran on has a result recorded.
+fn extract(store: &Store, layout: &Layout, x: &crate::Extractor, version: &str, progress: &dyn Fn(serde_json::Value), out: &mut LocalImport) -> Result<bool, String> {
     let ids = to_extract(store, version)?;
     if ids.is_empty() {
-        return Ok(());
+        return Ok(true);
     }
     let mut args: Vec<std::ffi::OsString> = vec!["--out".into(), local_dir()?.into()];
     if let Some(m) = &x.mapdata {
@@ -1148,18 +1282,21 @@ fn extract(store: &Store, layout: &Layout, x: &crate::Extractor, version: &str, 
         }
     }
     if paths.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
+    let tried = paths.len();
     args.extend(paths);
     let run = x.run(&args, progress)?;
     let rows = run.summary.as_ref().and_then(|s| s.get("results")).and_then(|r| r.as_array()).cloned().unwrap_or_default();
     let lock = op_lock_soon(layout)?;
+    let mut recorded = 0;
     for row in rows {
         let Some(id) = row.get("demo").and_then(|d| d.as_str()).filter(|id| ids.iter().any(|x| x == id)) else { continue };
         let ok = row.get("ok").and_then(|v| v.as_bool()) == Some(true);
         let reason = row.get("reason").and_then(|v| v.as_str());
         let detail = row.get("errors").and_then(|e| e.get(0)).and_then(|e| e.as_str());
         record_import(store, &lock, id, ok, reason, detail, version)?;
+        recorded += 1;
         if ok {
             out.extracted.push(id.to_string());
         } else {
@@ -1168,7 +1305,29 @@ fn extract(store: &Store, layout: &Layout, x: &crate::Extractor, version: &str, 
     }
     out.code = run.code;
     out.error = run.error;
-    Ok(())
+    Ok(recorded == tried && tried == ids.len())
+}
+
+/// The import a supervisor runs when a session ends with CS2 exited. A demo CS2 wrote in its last
+/// minute is still settling ([`SETTLE`]); the take is tried once more after `wait` lets it settle, if
+/// CS2 is still closed. Returns what went wrong, for the session status; the ledger has it too.
+pub fn import_after_session(probe: &dyn ProcessProbe, wait: &dyn Fn(Duration), import: &dyn Fn() -> Result<LocalImport, String>) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut note = |r: &Result<LocalImport, String>| match r {
+        Err(e) => problems.push(format!("Recorded demos were not imported: {e}")),
+        Ok(i) => problems.extend(
+            [i.take_error.as_ref().map(|e| format!("Recorded demos were not taken: {e}")), i.error.as_ref().map(|e| format!("Recorded demos were not extracted: {e}"))].into_iter().flatten(),
+        ),
+    };
+    let first = import();
+    note(&first);
+    if first.as_ref().is_ok_and(|i| i.taken.as_ref().is_some_and(|t| t.waiting > 0)) {
+        wait(SETTLE + Duration::from_secs(5));
+        if ensure_cs2_closed(probe, Phase::Operation).is_ok() {
+            note(&import());
+        }
+    }
+    problems
 }
 
 /// [`run_import`] in the app's process, with its state kept for `local_import_state` and its progress
@@ -1221,6 +1380,14 @@ mod tests {
     // tv_autorecord's name shape: the server name, on a listen server the host's Steam name, comes last
     const AUTO: &str = "auto-20261025-0335-de_dust2-Some-vs-the-persona.dem";
 
+    /// A Bot Mode session that records, open since an hour ago: the demos the tests write are its.
+    fn open_session(store: &Store) {
+        store.set_sessions(&[Session { start: unix(SystemTime::now()) - 3600, end: None }]).unwrap();
+    }
+
+    /// An import with no importer installed.
+    const NO_IMPORTER: &ExtractStep = &|_: &Store, _: &mut LocalImport| Err("The importer is not installed".to_string());
+
     fn later() -> SystemTime {
         SystemTime::now() + Duration::from_secs(120)
     }
@@ -1266,6 +1433,7 @@ mod tests {
         write(&layout.target(&format!("replays/{AUTO}")), b"a recorded match");
         write(&layout.target("steam.inf"), b"ClientVersion=2000935\r\nServerVersion=2000935\r\n");
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let lock = OpLock::acquire(&layout).unwrap();
         let t = take(&store, &layout, &CLOSED, &lock, later()).unwrap();
         assert_eq!((t.taken.len(), t.waiting, t.refused.len()), (1, 0, 0));
@@ -1285,6 +1453,7 @@ mod tests {
         let src = layout.target(&format!("replays/{AUTO}"));
         write(&src, b"recording");
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let lock = OpLock::acquire(&layout).unwrap();
         let t = take(&store, &layout, &CLOSED, &lock, SystemTime::now()).unwrap();
         assert_eq!((t.taken.len(), t.waiting), (0, 1));
@@ -1363,14 +1532,15 @@ mod tests {
         let s = Scratch::new("demos-held");
         let layout = fake_game(&s);
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         stored(&store, "20261101T1200Z_de_dust2_00000001", State::Taken);
         let tight = AppSettings { demo_cap_gb: 1.0, demo_floor_gb: 0.0, ..AppSettings::default() };
         // the sidecar's size is what a sweep counts: say the demo takes 2 GB
         let mut m = store.read_meta("20261101T1200Z_de_dust2_00000001").unwrap();
         m.dem_bytes = 2 * GB;
         store.write_meta(&m).unwrap();
-        assert_eq!(status(&store, &tight).unwrap().held, Some(Held { over_cap: true, under_floor: false }));
-        assert_eq!(status(&store, &AppSettings { demo_floor_gb: 0.0, ..AppSettings::default() }).unwrap().held, None);
+        assert_eq!(status(&store, &tight, None).unwrap().held, Some(Held { over_cap: true, under_floor: false }));
+        assert_eq!(status(&store, &AppSettings { demo_floor_gb: 0.0, ..AppSettings::default() }, None).unwrap().held, None);
     }
 
     #[test]
@@ -1379,6 +1549,7 @@ mod tests {
         let layout = fake_game(&s);
         write(&layout.target(&format!("replays/{AUTO}")), b"cut off in warmup");
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let lock = OpLock::acquire(&layout).unwrap();
         let id = take(&store, &layout, &CLOSED, &lock, later()).unwrap().taken.remove(0);
         assert_eq!(to_extract(&store, "1.18.0").unwrap(), [id.clone()]);
@@ -1400,11 +1571,12 @@ mod tests {
         let layout = fake_game(&s);
         write(&layout.target(&format!("replays/{AUTO}")), b"a recorded match");
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let lock = OpLock::acquire(&layout).unwrap();
         let id = take(&store, &layout, &CLOSED, &lock, later()).unwrap().taken.remove(0);
         fs::remove_file(store.dem(&id)).unwrap();
         sweep(&store, &lock, &policy(20, 0, 10), None, 0, None, None).unwrap();
-        let st = status(&store, &AppSettings::default()).unwrap();
+        let st = status(&store, &AppSettings::default(), None).unwrap();
         assert_eq!((st.used, st.demos[0].state), (0, State::Missing));
         assert!(fs::read_to_string(ledger(&store)).unwrap().contains("\"missing\""));
     }
@@ -1413,14 +1585,14 @@ mod tests {
     fn recording_needs_the_floor_plus_a_match_free_and_says_why_it_is_off() {
         let s = AppSettings::default();
         // free space is shown rounded down to the tenth, so it never reads as more than there is
-        let r = recording(&s, Ok(94 * GB / 10 + GB / 20), None);
+        let r = recording(&s, Ok(94 * GB / 10 + GB / 20), Ok(""));
         assert_eq!((r.tokens.len(), r.blocked.as_deref()), (0, Some("Recording off this time: 9.4 GB free, floor 10 GB.")));
-        let r = recording(&s, Ok(10 * GB + GB / 2), None);
+        let r = recording(&s, Ok(10 * GB + GB / 2), Ok(""));
         assert_eq!(r.blocked.as_deref(), Some("Recording off this time: 10.5 GB free, and a match needs 1 GB above the 10 GB floor."));
-        let r = recording(&s, Ok(11 * GB), None);
+        let r = recording(&s, Ok(11 * GB), Ok(""));
         assert_eq!((r.tokens, r.blocked), (TOKENS.map(String::from).to_vec(), None));
         let off = AppSettings { record_demos: false, ..AppSettings::default() };
-        assert_eq!((recording(&off, Ok(500 * GB), None).tokens.len(), recording(&off, Ok(0), None).blocked), (0, None));
+        assert_eq!((recording(&off, Ok(500 * GB), Ok("")).tokens.len(), recording(&off, Ok(0), Ok("")).blocked), (0, None));
     }
 
     #[test]
@@ -1509,6 +1681,7 @@ mod tests {
         let s = Scratch::new("demos-ledger-link");
         let layout = fake_game(&s);
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         store.ensure().unwrap();
         let outside = s.0.join("notes.txt");
         fs::write(&outside, b"the user's own file\n").unwrap();
@@ -1526,6 +1699,7 @@ mod tests {
         let layout = fake_game(&s);
         fs::create_dir_all(layout.target("replays")).unwrap();
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         store.ensure().unwrap();
         let outside = s.0.join("elsewhere").join("keep.dem");
         write(&outside, b"not a demo of the store's");
@@ -1565,6 +1739,7 @@ mod tests {
         let layout = fake_game(&s);
         let src = settled(&layout, b"recording");
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let lock = OpLock::acquire(&layout).unwrap();
         let held = fs::File::options().append(true).open(&src).unwrap();
         let t = take(&store, &layout, &CLOSED, &lock, SystemTime::now()).unwrap();
@@ -1589,6 +1764,7 @@ mod tests {
         let layout = fake_game(&s);
         let src = settled(&layout, b"a recorded match");
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let lock = OpLock::acquire(&layout).unwrap();
         let t = take_with(&store, &layout, &CLOSED, &lock, SystemTime::now(), &other_volume).unwrap();
         assert_eq!(t.taken.len(), 1);
@@ -1601,6 +1777,7 @@ mod tests {
         let layout = fake_game(&s);
         let src = settled(&layout, b"a recorded match");
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let lock = OpLock::acquire(&layout).unwrap();
         let e = take_with(&store, &layout, &starts_after(2), &lock, SystemTime::now(), &other_volume).unwrap_err();
         assert!(e.contains("CS2 is running"), "{e}");
@@ -1622,6 +1799,7 @@ mod tests {
         let s = Scratch::new("demos-ledger");
         let layout = fake_game(&s);
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         store.ensure().unwrap();
         fs::write(ledger(&store), "{\"at\":\"2026-11-01T12:00:00Z\",\"id\":\"a\",\"event\":\"taken\",\"reason\":null}\n{\"at\":\"2026-11").unwrap();
         store.log("20261101T1200Z_de_dust2_00000001", "extracted", None).unwrap();
@@ -1639,6 +1817,7 @@ mod tests {
         let layout = fake_game(&s);
         let src = settled(&layout, b"a recorded match");
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let lock = OpLock::acquire(&layout).unwrap();
         // CS2 starts during a copy from another volume: the copy and its sidecar stand, the original stays
         take_with(&store, &layout, &starts_after(2), &lock, SystemTime::now(), &other_volume).unwrap_err();
@@ -1672,6 +1851,7 @@ mod tests {
         let layout = fake_game(&s);
         fs::create_dir_all(layout.target("replays")).unwrap();
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let id = "20261101T1205Z_de_dust2_00000001";
         write(&store.dem(id), b"a demo");
         take(&store, &layout, &CLOSED, &OpLock::acquire(&layout).unwrap(), later()).unwrap();
@@ -1695,12 +1875,155 @@ mod tests {
     }
 
     #[test]
+    fn only_a_demo_cs2_began_in_a_bot_mode_session_is_taken_and_the_users_own_stay_unnamed() {
+        // fails if a take adopts every auto-*.dem: one the user recorded himself would be moved into the
+        // store, and deleted by its retention once extracted
+        let s = Scratch::new("demos-provenance");
+        let layout = fake_game(&s);
+        let src = layout.target(&format!("replays/{AUTO}"));
+        write(&src, b"the user's own recording");
+        let store = Store::of(&layout).unwrap();
+        let lock = OpLock::acquire(&layout).unwrap();
+        let t = take(&store, &layout, &CLOSED, &lock, later()).unwrap();
+        assert_eq!((t.taken.len(), t.foreign, t.waiting), (0, 1, 0));
+        assert_eq!(fs::read(&src).unwrap(), b"the user's own recording");
+        assert_eq!(foreign_demos(&layout, &store), Some(1));
+        let st = status(&store, &AppSettings::default(), foreign_demos(&layout, &store)).unwrap();
+        assert_eq!(st.foreign, Some(1));
+        assert!(!serde_json::to_string(&st).unwrap().to_lowercase().contains("persona"));
+        // a session that ended before the demo began is not its session either
+        let now = SystemTime::now();
+        session_started(&store, &lock, now - Duration::from_secs(3600)).unwrap();
+        session_ended(&store, &lock, now - Duration::from_secs(600)).unwrap();
+        assert_eq!(take(&store, &layout, &CLOSED, &lock, later()).unwrap().foreign, 1);
+        assert!(src.exists());
+        // inside a session that records, it is taken
+        session_started(&store, &lock, now - Duration::from_secs(60)).unwrap();
+        assert_eq!(take(&store, &layout, &CLOSED, &lock, later()).unwrap().taken.len(), 1);
+        assert!(!src.exists());
+    }
+
+    #[test]
+    fn a_session_window_has_a_margin_and_an_open_one_ends_at_the_next_start_or_after_twelve_hours() {
+        let closed = [Session { start: 1000, end: Some(2000) }];
+        assert!(in_session(&closed, 1000 - SESSION_MARGIN) && in_session(&closed, 2000 + SESSION_MARGIN));
+        assert!(!in_session(&closed, 1000 - SESSION_MARGIN - 1) && !in_session(&closed, 2000 + SESSION_MARGIN + 1));
+        // an open session runs to the next one's start
+        let open = [Session { start: 1000, end: None }, Session { start: 3000, end: Some(3100) }];
+        assert!(in_session(&open, 2500) && !in_session(&open, 3500));
+        // or, with none after it, for twelve hours
+        let alone = [Session { start: 1000, end: None }];
+        assert!(in_session(&alone, 1000 + OPEN_SESSION) && !in_session(&alone, 1000 + OPEN_SESSION + SESSION_MARGIN + 1));
+    }
+
+    #[test]
+    fn a_sidecar_that_names_another_demo_is_not_read_and_its_demo_not_deleted() {
+        // fails if a sidecar's own id is trusted: a delete would act on the demo it names
+        let s = Scratch::new("demos-id-mismatch");
+        let layout = fake_game(&s);
+        let store = Store::of(&layout).unwrap();
+        let (a, b) = ("20261101T1200Z_de_dust2_00000001", "20261102T1200Z_de_dust2_00000002");
+        stored(&store, b, State::Extracted);
+        write(&store.dem(a), b"a demo");
+        fs::write(store.root.join(meta_name(a)), serde_json::to_string(&meta(b, "2026-11-02T12:00:00Z", 6, "200", State::Extracted)).unwrap()).unwrap();
+        assert!(store.read_meta(a).unwrap_err().contains("names another demo"));
+        assert!(delete(&store, &OpLock::acquire(&layout).unwrap(), a).is_err());
+        assert!(store.dem(a).exists() && store.dem(b).exists());
+        assert!(store.metas().is_err(), "a sweep must not run on a list with a sidecar it cannot trust");
+    }
+
+    #[test]
+    fn a_failed_demo_stays_protected_when_the_import_stops_before_its_retry_is_recorded() {
+        // fails if the sweep judges failed demos against a new extractor whose run never recorded a
+        // result: the demo would lose its protection without having been retried
+        let s = Scratch::new("demos-retry-kept");
+        let layout = fake_game(&s);
+        crate::botmode::settings::set_demo_policy(&layout, crate::botmode::settings::DemoPolicy { cap_gb: 20.0, floor_gb: 0.0, keep_last: 0 }, None).unwrap();
+        fs::create_dir_all(layout.target("replays")).unwrap();
+        let store = Store::of(&layout).unwrap();
+        let id = "20261101T1200Z_de_dust2_00000001";
+        stored(&store, id, State::Failed);
+        let mut m = store.read_meta(id).unwrap();
+        m.failed_versions = vec!["1.18.0".into()];
+        store.write_meta(&m).unwrap();
+        let crashed: &ExtractStep = &|_, _| Err("the importer stopped".to_string());
+        run_import_with(&layout, &CLOSED, crashed).unwrap();
+        let incomplete: &ExtractStep = &|_, _| Ok(None);
+        run_import_with(&layout, &CLOSED, incomplete).unwrap();
+        assert!(store.dem(id).exists());
+        assert!(fs::read_to_string(ledger(&store)).unwrap().contains("\"import_failed\""));
+    }
+
+    #[test]
+    fn a_replays_folder_that_cannot_be_read_is_an_error_not_an_empty_take() {
+        // fails if any error reading replays\ reads as "nothing to take", hiding a demo the take never saw
+        let s = Scratch::new("demos-replays-unreadable");
+        let layout = fake_game(&s);
+        let store = Store::of(&layout).unwrap();
+        let bad = Layout { csgo: PathBuf::from("C:\\bad\0path"), data: layout.data.clone() };
+        assert!(take(&store, &bad, &CLOSED, &OpLock::acquire(&layout).unwrap(), later()).is_err());
+        // a game with no replays folder yet has nothing to take
+        assert_eq!(take(&store, &layout, &CLOSED, &OpLock::acquire(&layout).unwrap(), later()).unwrap(), Taken::default());
+    }
+
+    #[test]
+    fn limits_are_bounded_and_their_sums_with_the_reserve_never_overflow() {
+        // fails if a floor near u64::MAX bytes overflows with the reserve, or an absurd limit is saved
+        let s = Scratch::new("demos-bounds");
+        let layout = fake_game(&s);
+        let p = |cap_gb, floor_gb| crate::botmode::settings::DemoPolicy { cap_gb, floor_gb, keep_last: 10 };
+        assert!(crate::botmode::settings::set_demo_policy(&layout, p(20.0, 10_001.0), None).unwrap_err().contains("0 to 10000 GB"));
+        assert!(crate::botmode::settings::set_demo_policy(&layout, p(1e300, 10.0), None).unwrap_err().contains("1 to 10000 GB"));
+        crate::botmode::settings::set_demo_policy(&layout, p(10_000.0, 10_000.0), None).unwrap();
+        // a settings file edited by hand is held to the same bounds
+        let wild = AppSettings { demo_floor_gb: f64::MAX, demo_cap_gb: f64::INFINITY, ..AppSettings::default() };
+        assert_eq!(Policy::of(&wild), Policy { cap: 10_000 * GB, floor: 10_000 * GB, keep_last: 10 });
+        // one that is not a number at all is the default, never a zero cap that would evict everything
+        assert_eq!(Policy::of(&AppSettings { demo_cap_gb: f64::NAN, ..AppSettings::default() }).cap, 20 * GB);
+        assert_eq!(recording(&wild, Ok(u64::MAX), Ok("")).tokens.len(), TOKENS.len());
+        assert!(recording(&wild, Ok(0), Ok("")).blocked.is_some());
+        let plan = plan_sweep(&[meta("20261101T1200Z_de_dust2_00000001", "2026-11-01T12:00:00Z", u64::MAX, "1", State::Extracted)], &[], &Policy::of(&wild), u64::MAX, u64::MAX, None, None);
+        assert_eq!(plan.delete.len(), 1);
+    }
+
+    #[test]
+    fn steam_options_that_cannot_be_read_turn_recording_off_and_say_why() {
+        // fails if unreadable options read as "no conflict": the dialog would promise a recording the
+        // launch then refuses to start
+        let r = recording(&AppSettings::default(), Ok(500 * GB), Err("localconfig.vdf is locked"));
+        assert_eq!((r.tokens.len(), r.blocked.as_deref()), (0, Some("Recording off this time: CS2's launch options in Steam could not be read (localconfig.vdf is locked).")));
+    }
+
+    #[test]
+    fn after_a_session_a_demo_still_settling_is_taken_once_it_has_and_only_with_cs2_closed() {
+        // fails if the supervisor's import leaves the last match's demo in replays\ because CS2 wrote it
+        // in its last minute, or takes it after CS2 has started again
+        let s = Scratch::new("demos-after-session");
+        let layout = fake_game(&s);
+        let src = layout.target(&format!("replays/{AUTO}"));
+        write(&src, b"the last match");
+        let store = Store::of(&layout).unwrap();
+        open_session(&store);
+        let import = || run_import_with(&layout, &CLOSED, NO_IMPORTER);
+        let age = |_: Duration| fs::File::options().write(true).open(&src).unwrap().set_modified(SystemTime::now() - Duration::from_secs(120)).unwrap();
+        // CS2 starts again before the demo settles: no second take
+        let problems = import_after_session(&starts_after(0), &age, &import);
+        assert!(src.exists() && store.metas().unwrap().is_empty());
+        assert!(problems.iter().any(|p| p.contains("not extracted")), "{problems:?}");
+        assert!(fs::read_to_string(ledger(&store)).unwrap().contains("\"import_failed\""));
+        write(&src, b"the last match");
+        import_after_session(&CLOSED, &age, &import);
+        assert!(!src.exists());
+        assert_eq!(store.metas().unwrap().len(), 1);
+    }
+
+    #[test]
     fn steam_options_that_mention_gotv_in_any_form_turn_recording_off_and_say_which() {
         // fails if Steam's stored options are not read, or only some forms are: Steam adds them after
         // the app's tokens, so "-tv_enable" or a quoted "+tv_enable 0" there leaves recording half on
         // while the dialog says it is on
         let s = AppSettings::default();
-        let r = recording(&s, Ok(500 * GB), Some("-novid \"+tv_enable 0\""));
+        let r = recording(&s, Ok(500 * GB), Ok("-novid \"+tv_enable 0\""));
         assert_eq!((r.tokens.len(), r.blocked.as_deref()), (0, Some("Recording off this time: your Steam launch options set tv_enable.")));
         assert_eq!(steam_conflict("-novid -tv_enable"), Some("tv_enable"));
         assert_eq!(steam_conflict("+TV_AUTORECORD false"), Some("tv_autorecord"));
@@ -1709,7 +2032,7 @@ mod tests {
         assert_eq!(steam_conflict("+tv_enable 1"), Some("tv_enable"));
         // a longer name that only starts like one is another setting
         assert_eq!(steam_conflict("-novid +tv_enable_cheats 1 +fps_max 0"), None);
-        assert_eq!(recording(&s, Ok(500 * GB), Some("-novid")).tokens.len(), TOKENS.len());
+        assert_eq!(recording(&s, Ok(500 * GB), Ok("-novid")).tokens.len(), TOKENS.len());
     }
 
     #[test]
@@ -1721,11 +2044,12 @@ mod tests {
         crate::botmode::settings::set_demo_policy(&layout, crate::botmode::settings::DemoPolicy { cap_gb: 20.0, floor_gb: 0.0, keep_last: 0 }, None).unwrap();
         write(&layout.target(&format!("replays/{AUTO}")), b"a recorded match");
         let store = Store::of(&layout).unwrap();
+        open_session(&store);
         let old = "20261101T1200Z_de_dust2_00000001";
         stored(&store, old, State::Extracted);
         let settled = SystemTime::now() - Duration::from_secs(120);
         fs::File::options().write(true).open(layout.target(&format!("replays/{AUTO}"))).unwrap().set_modified(settled).unwrap();
-        let r = run_import_with(&layout, &CLOSED, &|| Err("The importer is not installed".into()), &|_| {}).unwrap();
+        let r = run_import_with(&layout, &CLOSED, &NO_IMPORTER).unwrap();
         assert_eq!(r.error.as_deref(), Some("The importer is not installed"));
         let taken = r.taken.unwrap().taken;
         assert_eq!(taken.len(), 1);

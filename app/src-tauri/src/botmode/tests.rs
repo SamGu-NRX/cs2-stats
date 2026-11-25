@@ -2846,7 +2846,7 @@ fn a_recorded_launch_adds_gotv_after_the_users_options_and_a_floor_breach_drops_
         launch::check_start(&plan, &layout, &CLOSED, &steam).unwrap();
     }
     // a floor no disk meets: the launch goes ahead without recording, and says why
-    settings::set_demo_policy(&layout, limits(1e9), None).unwrap();
+    settings::set_demo_policy(&layout, limits(10_000.0), None).unwrap();
     let lock = OpLock::acquire(&layout).unwrap();
     let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
     assert_eq!(plan.args, ["-applaunch", "730", "-insecure", "+exec", "botmode"]);
